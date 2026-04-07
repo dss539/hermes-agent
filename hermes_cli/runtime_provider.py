@@ -339,9 +339,15 @@ def _resolve_named_custom_runtime(
             pool_result["model"] = model_name
         return pool_result
 
+    config_api_key = str(custom_provider.get("api_key", "") or "").strip()
+    if config_api_key.isupper() and "_" in config_api_key:
+        config_api_key = os.getenv(config_api_key, "").strip()
+
+    is_ollama_url = "ollama.com" in base_url.lower()
     api_key_candidates = [
         (explicit_api_key or "").strip(),
-        str(custom_provider.get("api_key", "") or "").strip(),
+        config_api_key,
+        (os.getenv("OLLAMA_API_KEY", "").strip() if is_ollama_url else ""),
         os.getenv("OPENAI_API_KEY", "").strip(),
         os.getenv("OPENROUTER_API_KEY", "").strip(),
     ]
