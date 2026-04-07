@@ -4291,6 +4291,40 @@ class HermesCLI:
         print(f"(^_^)b Undid {removed_count} message(s). Removed: \"{removed_msg[:60]}{'...' if len(removed_msg) > 60 else ''}\"")
         remaining = len(self.conversation_history)
         print(f"  {remaining} message(s) remaining in history.")
+
+    def _group_model_display_providers(self, providers):
+        """Collapse per-model Ollama Cloud custom providers into one display section."""
+        grouped = []
+        ollama_models = []
+        ollama_current = False
+        ollama_api_url = ""
+
+        for p in providers or []:
+            name = str(p.get("name") or "")
+            slug = str(p.get("slug") or "")
+            if name == "ollama-cloud" or name.startswith("ollama-") or slug.startswith("custom:ollama-"):
+                ollama_current = ollama_current or bool(p.get("is_current"))
+                if not ollama_api_url:
+                    ollama_api_url = str(p.get("api_url") or "")
+                for model_id in p.get("models") or []:
+                    if model_id and model_id not in ollama_models:
+                        ollama_models.append(model_id)
+                continue
+            grouped.append(p)
+
+        if ollama_models or ollama_current or ollama_api_url:
+            grouped.append({
+                "slug": "custom:ollama-cloud",
+                "name": "Ollama Cloud",
+                "is_current": ollama_current,
+                "is_user_defined": True,
+                "models": sorted(ollama_models),
+                "total_models": len(ollama_models),
+                "source": "custom-provider-group",
+                "api_url": ollama_api_url or "https://ollama.com/v1",
+            })
+
+        return grouped
     
     def _run_curses_picker(self, title: str, items: list[str], default_index: int = 0) -> int | None:
         """Run curses_single_select via run_in_terminal so prompt_toolkit handles terminal ownership cleanly."""
@@ -4739,11 +4773,11 @@ class HermesCLI:
         providers with their available models.
         """
         from hermes_cli.models import (
-            curated_models_for_provider, list_available_providers,
+            list_available_providers,
             normalize_provider, _PROVIDER_LABELS,
-            get_pricing_for_provider, format_model_pricing_table,
         )
         from hermes_cli.auth import resolve_provider as _resolve_provider
+        from hermes_cli.model_switch import list_authenticated_providers
 
         # Resolve current provider
         raw_provider = normalize_provider(self.provider)
@@ -4765,37 +4799,25 @@ class HermesCLI:
 
         # Show all authenticated providers with their models
         providers = list_available_providers()
+        authed_summary = list_authenticated_providers(current_provider=current, user_providers={}, custom_providers=(load_config().get("custom_providers") or []), max_models=6)
+        authed_summary = self._group_model_display_providers(authed_summary)
         authed = [p for p in providers if p["authenticated"]]
         unauthed = [p for p in providers if not p["authenticated"]]
 
-        if authed:
+        if authed_summary:
             print("  Authenticated providers & models:")
-            for p in authed:
-                is_active = p["id"] == current
-                marker = " ← active" if is_active else ""
-                print(f"    [{p['id']}]{marker}")
-                curated = curated_models_for_provider(p["id"])
-                # Fetch pricing for providers that support it (openrouter, nous)
-                pricing_map = get_pricing_for_provider(p["id"]) if p["id"] in ("openrouter", "nous") else {}
-                if curated and pricing_map:
-                    cur_model = self.model if is_active else ""
-                    for line in format_model_pricing_table(curated, pricing_map, current_model=cur_model):
-                        print(line)
-                elif curated:
-                    for mid, desc in curated:
-                        current_marker = " ← current" if (is_active and mid == self.model) else ""
-                        print(f"      {mid}{current_marker}")
-                elif p["id"] == "custom":
-                    from hermes_cli.models import _get_custom_base_url
-                    custom_url = _get_custom_base_url()
-                    if custom_url:
-                        print(f"      endpoint: {custom_url}")
-                    if is_active:
-                        print(f"      model: {self.model} ← current")
-                    print("      (use hermes model to change)")
+            for p in authed_summary:
+                marker = " ← active" if p["is_current"] else ""
+                print(f"    {p['name']} [{p['slug']}]{marker}:")
+                if p["models"]:
+                    for model_id in p["models"]:
+                        print(f"      {model_id}")
+                elif p.get("api_url"):
+                    print(f"      {p['api_url']}")
                 else:
-                    print("      (use hermes model to change)")
+                    print("      (no models listed)")
                 print()
+            print()
 
         if unauthed:
             names = ", ".join(p["label"] for p in unauthed)

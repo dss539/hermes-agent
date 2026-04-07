@@ -509,8 +509,31 @@ def switch_model(
     # PATH B: No explicit provider — resolve from model input
     # =================================================================
     else:
+        # --- Step a0: Named custom provider selected directly by name ---
+        _raw_norm = raw_input.strip().lower()
+        _matched_custom = False
+        try:
+            import re
+            from hermes_cli.config import load_config
+            _cfg = load_config()
+            for _entry in (_cfg.get("custom_providers") or []):
+                if not isinstance(_entry, dict):
+                    continue
+                _name = str(_entry.get("name") or "").strip()
+                if not _name:
+                    continue
+                _slug = f"custom:{re.sub(r'[^a-z0-9]+', '-', _name.lower()).strip('-')}"
+                if _raw_norm in {_name.lower(), _slug.lower()}:
+                    target_provider = _slug
+                    _saved_model = str(_entry.get("model") or "").strip()
+                    new_model = _saved_model or raw_input.strip()
+                    _matched_custom = True
+                    break
+        except Exception:
+            pass
+
         # --- Step a: Try alias resolution on current provider ---
-        alias_result = resolve_alias(raw_input, current_provider)
+        alias_result = None if _matched_custom else resolve_alias(raw_input, current_provider)
 
         if alias_result is not None:
             target_provider, new_model, resolved_alias = alias_result
@@ -828,7 +851,8 @@ def list_authenticated_providers(
             continue
 
         # Check if credentials exist
-        has_creds = False
+        has_creds = pid == current_provider
+        if overlay.extra_env_vars:
         if overlay.extra_env_vars:
             has_creds = any(os.environ.get(ev) for ev in overlay.extra_env_vars)
         # Also check api_key_env_vars from PROVIDER_REGISTRY for api_key auth_type
@@ -873,7 +897,7 @@ def list_authenticated_providers(
         seen_slugs.add(pid)
         seen_slugs.add(hermes_slug)
 
-    # --- 3. User-defined endpoints from config ---
+    # --- 3. User-defined endpoints from providers: config ---
     if user_providers and isinstance(user_providers, dict):
         for ep_name, ep_cfg in user_providers.items():
             if not isinstance(ep_cfg, dict):
@@ -886,8 +910,6 @@ def list_authenticated_providers(
             if default_model:
                 models_list.append(default_model)
 
-            # Try to probe /v1/models if URL is set (but don't block on it)
-            # For now just show what we know from config
             results.append({
                 "slug": ep_name,
                 "name": display_name,
