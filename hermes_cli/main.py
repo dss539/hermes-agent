@@ -537,9 +537,10 @@ def _probe_container(cmd: list, backend: str, via_sudo: bool = False):
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:
-        label = f"sudo {backend}" if via_sudo else backend
+        label = f"sudo -S -p '' {backend}" if via_sudo else backend
         print(
-            f"Error: timed out waiting for {label} to respond.\n"
+            f"Error: timed out waiting for {label} to respond.
+"
             f"The {backend} daemon may be unresponsive or starting up.",
             file=sys.stderr,
         )
@@ -549,7 +550,7 @@ def _probe_container(cmd: list, backend: str, via_sudo: bool = False):
 def _exec_in_container(container_info: dict, cli_args: list):
     """Replace the current process with a command inside the managed container.
 
-    Probes whether sudo is needed (rootful containers), then os.execvp
+    Probes whether sudo -S -p '' is needed (rootful containers), then os.execvp
     into the container. On success the Python process is replaced entirely
     and the container's exit code becomes the process exit code (OS semantics).
     On failure, OSError propagates naturally.
@@ -573,13 +574,13 @@ def _exec_in_container(container_info: dict, cli_args: list):
 
     # Rootful containers (NixOS systemd service) are invisible to unprivileged
     # users — Podman uses per-user namespaces, Docker needs group access.
-    # Probe whether the runtime can see the container; if not, try via sudo.
+    # Probe whether the runtime can see the container; if not, try via sudo -S -p ''.
     sudo_path = None
     probe = _probe_container(
         [runtime, "inspect", "--format", "ok", container_name], backend,
     )
     if probe.returncode != 0:
-        sudo_path = shutil.which("sudo")
+        sudo_path = shutil.which("sudo -S -p ''")
         if sudo_path:
             probe2 = _probe_container(
                 [sudo_path, "-n", runtime, "inspect", "--format", "ok", container_name],
@@ -587,28 +588,43 @@ def _exec_in_container(container_info: dict, cli_args: list):
             )
             if probe2.returncode != 0:
                 print(
-                    f"Error: container '{container_name}' not found via {backend}.\n"
-                    f"\n"
-                    f"The container is likely running as root. Your user cannot see it\n"
-                    f"because {backend} uses per-user namespaces. Grant passwordless\n"
-                    f"sudo for {backend} — the -n (non-interactive) flag is required\n"
-                    f"because a password prompt would hang or break piped commands.\n"
-                    f"\n"
-                    f"On NixOS:\n"
-                    f"\n"
-                    f'  security.sudo.extraRules = [{{\n'
-                    f'    users = [ "{os.getenv("USER", "your-user")}" ];\n'
-                    f'    commands = [{{ command = "{runtime}"; options = [ "NOPASSWD" ]; }}];\n'
-                    f'  }}];\n'
-                    f"\n"
-                    f"Or run: sudo hermes {' '.join(cli_args)}",
+                    f"Error: container '{container_name}' not found via {backend}.
+"
+                    f"
+"
+                    f"The container is likely running as root. Your user cannot see it
+"
+                    f"because {backend} uses per-user namespaces. Grant passwordless
+"
+                    f"sudo -S -p '' for {backend} — the -n (non-interactive) flag is required
+"
+                    f"because a password prompt would hang or break piped commands.
+"
+                    f"
+"
+                    f"On NixOS:
+"
+                    f"
+"
+                    f'  security.sudo -S -p ''.extraRules = [{{
+'
+                    f'    users = [ "{os.getenv("USER", "your-user")}" ];
+'
+                    f'    commands = [{{ command = "{runtime}"; options = [ "NOPASSWD" ]; }}];
+'
+                    f'  }}];
+'
+                    f"
+"
+                    f"Or run: sudo -S -p '' hermes {' '.join(cli_args)}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
         else:
             print(
-                f"Error: container '{container_name}' not found via {backend}.\n"
-                f"The container may be running under root. Try: sudo hermes {' '.join(cli_args)}",
+                f"Error: container '{container_name}' not found via {backend}.
+"
+                f"The container may be running under root. Try: sudo -S -p '' hermes {' '.join(cli_args)}",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -633,6 +649,18 @@ def _exec_in_container(container_info: dict, cli_args: list):
     )
 
     os.execvp(exec_cmd[0], exec_cmd)
+
+
+def _auto_resume_last_session_enabled() -> bool:
+    """Return True when config requests automatic CLI session resume."""
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config() or {}
+        display_cfg = cfg.get("display") or {}
+        return bool(display_cfg.get("auto_resume_last_session", False))
+    except Exception:
+        return False
 
 
 def _resolve_session_by_name_or_id(name_or_id: str) -> Optional[str]:
@@ -683,6 +711,12 @@ def cmd_chat(args):
             else:
                 print("No previous CLI session found to continue.")
                 sys.exit(1)
+
+    # Auto-resume the latest CLI session when enabled and no explicit resume/continue was requested.
+    if not getattr(args, "resume", None) and not continue_val and _auto_resume_last_session_enabled():
+        last_id = _resolve_last_cli_session()
+        if last_id:
+            args.resume = last_id
 
     # Resolve --resume by title if it's not a direct session ID
     resume_val = getattr(args, "resume", None)
