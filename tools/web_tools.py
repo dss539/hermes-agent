@@ -17,6 +17,7 @@ Backend compatibility:
 - Firecrawl: https://docs.firecrawl.dev/introduction (search, extract, crawl; direct or derived firecrawl-gateway.<domain> for Nous Subscribers)
 - Parallel: https://docs.parallel.ai (search, extract)
 - Tavily: https://tavily.com (search, extract, crawl)
+- Brave Search API: https://api.search.brave.com (search only)
 
 LLM Processing:
 - Uses OpenRouter API with Gemini 3 Flash Preview for intelligent content extraction
@@ -88,7 +89,7 @@ def _get_backend() -> str:
     keys manually without running setup.
     """
     configured = (_load_web_config().get("backend") or "").lower().strip()
-    if configured in ("parallel", "firecrawl", "tavily", "exa"):
+    if configured in ("parallel", "firecrawl", "tavily", "exa", "brave"):
         return configured
 
     # Fallback for manual / legacy config — pick the highest-priority
@@ -99,6 +100,7 @@ def _get_backend() -> str:
         ("parallel", _has_env("PARALLEL_API_KEY")),
         ("tavily", _has_env("TAVILY_API_KEY")),
         ("exa", _has_env("EXA_API_KEY")),
+        ("brave", _has_env("BRAVE_SEARCH_API_KEY")),
     )
     for backend, available in backend_candidates:
         if available:
@@ -117,6 +119,8 @@ def _is_backend_available(backend: str) -> bool:
         return check_firecrawl_api_key()
     if backend == "tavily":
         return _has_env("TAVILY_API_KEY")
+    if backend == "brave":
+        return _has_env("BRAVE_SEARCH_API_KEY")
     return False
 
 # ─── Firecrawl Client ────────────────────────────────────────────────────────
@@ -187,6 +191,7 @@ def _web_requires_env() -> list[str]:
         "EXA_API_KEY",
         "PARALLEL_API_KEY",
         "TAVILY_API_KEY",
+        "BRAVE_SEARCH_API_KEY",
         "FIRECRAWL_API_KEY",
         "FIRECRAWL_API_URL",
     ]
@@ -282,6 +287,7 @@ def _get_async_parallel_client():
 # ─── Tavily Client ───────────────────────────────────────────────────────────
 
 _TAVILY_BASE_URL = "https://api.tavily.com"
+_BRAVE_SEARCH_BASE_URL = "https://api.search.brave.com/res/v1"
 
 
 def _tavily_request(endpoint: str, payload: dict) -> dict:
@@ -359,6 +365,43 @@ def _normalize_tavily_documents(response: dict, fallback_url: str = "") -> List[
             "metadata": {"sourceURL": url_str},
         })
     return documents
+
+
+def _brave_request(endpoint: str, params: dict) -> dict:
+    """Send a GET request to the Brave Search API."""
+    api_key = os.getenv("BRAVE_SEARCH_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "BRAVE_SEARCH_API_KEY environment variable not set. "
+            "Get your API key at https://api.search.brave.com/"
+        )
+
+    url = f"{_BRAVE_SEARCH_BASE_URL}/{endpoint.lstrip('/')}"
+    logger.info("Brave Search %s request to %s", endpoint, url)
+    response = httpx.get(
+        url,
+        params=params,
+        headers={
+            "Accept": "application/json",
+            "X-Subscription-Token": api_key,
+        },
+        timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _normalize_brave_search_results(response: dict) -> dict:
+    """Normalize Brave web search results to the standard web search format."""
+    web_results = []
+    for i, result in enumerate(((response.get("web") or {}).get("results") or [])):
+        web_results.append({
+            "title": result.get("title", ""),
+            "url": result.get("url", ""),
+            "description": result.get("description", ""),
+            "position": i + 1,
+        })
+    return {"success": True, "data": {"web": web_results}}
 
 
 def _to_plain_object(value: Any) -> Any:
@@ -988,6 +1031,20 @@ def _parallel_search(query: str, limit: int = 5) -> dict:
     return {"success": True, "data": {"web": web_results}}
 
 
+def _brave_search(query: str, limit: int = 5) -> dict:
+    """Search using the Brave Search API and return results as a dict."""
+    from tools.interrupt import is_interrupted
+    if is_interrupted():
+        return {"error": "Interrupted", "success": False}
+
+    logger.info("Brave search: '%s' (limit=%d)", query, limit)
+    raw = _brave_request("web/search", {
+        "q": query,
+        "count": min(limit, 20),
+    })
+    return _normalize_brave_search_results(raw)
+
+
 async def _parallel_extract(urls: List[str]) -> List[Dict[str, Any]]:
     """Extract content from URLs using the Parallel async SDK.
 
@@ -1094,6 +1151,15 @@ def web_search_tool(query: str, limit: int = 5) -> str:
 
         if backend == "exa":
             response_data = _exa_search(query, limit)
+            debug_call_data["results_count"] = len(response_data.get("data", {}).get("web", []))
+            result_json = json.dumps(response_data, indent=2, ensure_ascii=False)
+            debug_call_data["final_response_size"] = len(result_json)
+            _debug.log_call("web_search_tool", debug_call_data)
+            _debug.save()
+            return result_json
+
+        if backend == "brave":
+            response_data = _brave_search(query, limit)
             debug_call_data["results_count"] = len(response_data.get("data", {}).get("web", []))
             result_json = json.dumps(response_data, indent=2, ensure_ascii=False)
             debug_call_data["final_response_size"] = len(result_json)
@@ -1239,6 +1305,15 @@ async def web_extract_tool(
             results = []
         else:
             backend = _get_backend()
+
+            if backend == "brave":
+                return json.dumps({
+                    "results": [{
+                        "url": safe_urls[0] if safe_urls else "",
+                        "title": "",
+                        "content": "",
+                        "error": "Brave Search backend supports search only. Configure Firecrawl, Tavily, Exa, or Parallel for web_extract.",
+                    }]}, ensure_ascii=False)
 
             if backend == "parallel":
                 results = await _parallel_extract(safe_urls)
@@ -1541,6 +1616,14 @@ async def web_crawl_tool(
         effective_model = model or _get_default_summarizer_model()
         auxiliary_available = check_auxiliary_model()
         backend = _get_backend()
+
+        if backend == "brave":
+            return json.dumps({"results": [{
+                "url": url,
+                "title": "",
+                "content": "",
+                "error": "Brave Search backend supports search only. Configure Firecrawl or Tavily for web_crawl.",
+            }]}, ensure_ascii=False)
 
         # Tavily supports crawl via its /crawl endpoint
         if backend == "tavily":
@@ -1921,9 +2004,9 @@ def check_firecrawl_api_key() -> bool:
 def check_web_api_key() -> bool:
     """Check whether the configured web backend is available."""
     configured = _load_web_config().get("backend", "").lower().strip()
-    if configured in ("exa", "parallel", "firecrawl", "tavily"):
+    if configured in ("exa", "parallel", "firecrawl", "tavily", "brave"):
         return _is_backend_available(configured)
-    return any(_is_backend_available(backend) for backend in ("exa", "parallel", "firecrawl", "tavily"))
+    return any(_is_backend_available(backend) for backend in ("exa", "parallel", "firecrawl", "tavily", "brave"))
 
 
 def check_auxiliary_model() -> bool:
@@ -1961,6 +2044,8 @@ if __name__ == "__main__":
             print("   Using Parallel API (https://parallel.ai)")
         elif backend == "tavily":
             print("   Using Tavily API (https://tavily.com)")
+        elif backend == "brave":
+            print("   Using Brave Search API (https://api.search.brave.com)")
         else:
             if firecrawl_url_available:
                 print(f"   Using self-hosted Firecrawl: {os.getenv('FIRECRAWL_API_URL').strip().rstrip('/')}")
@@ -1973,7 +2058,7 @@ if __name__ == "__main__":
     else:
         print("❌ No web search backend configured")
         print(
-            "Set EXA_API_KEY, PARALLEL_API_KEY, TAVILY_API_KEY, FIRECRAWL_API_KEY, FIRECRAWL_API_URL"
+            "Set EXA_API_KEY, PARALLEL_API_KEY, TAVILY_API_KEY, BRAVE_SEARCH_API_KEY, FIRECRAWL_API_KEY, FIRECRAWL_API_URL"
             f"{_firecrawl_backend_help_suffix()}"
         )
 
@@ -2000,47 +2085,6 @@ if __name__ == "__main__":
     else:
         print("🐛 Debug mode disabled (set WEB_TOOLS_DEBUG=true to enable)")
     
-    print("\nBasic usage:")
-    print("  from web_tools import web_search_tool, web_extract_tool, web_crawl_tool")
-    print("  import asyncio")
-    print("")
-    print("  # Search (synchronous)")
-    print("  results = web_search_tool('Python tutorials')")
-    print("")
-    print("  # Extract and crawl (asynchronous)")
-    print("  async def main():")
-    print("      content = await web_extract_tool(['https://example.com'])")
-    print("      crawl_data = await web_crawl_tool('example.com', 'Find docs')")
-    print("  asyncio.run(main())")
-    
-    if nous_available:
-        print("\nLLM-enhanced usage:")
-        print("  # Content automatically processed for pages >5000 chars (default)")
-        print("  content = await web_extract_tool(['https://python.org/about/'])")
-        print("")
-        print("  # Customize processing parameters")
-        print("  crawl_data = await web_crawl_tool(")
-        print("      'docs.python.org',")
-        print("      'Find key concepts',")
-        print("      model='google/gemini-3-flash-preview',")
-        print("      min_length=3000")
-        print("  )")
-        print("")
-        print("  # Disable LLM processing")
-        print("  raw_content = await web_extract_tool(['https://example.com'], use_llm_processing=False)")
-    
-    print("\nDebug mode:")
-    print("  # Enable debug logging")
-    print("  export WEB_TOOLS_DEBUG=true")
-    print("  # Debug logs capture:")
-    print("  # - All tool calls with parameters")
-    print("  # - Original API responses")
-    print("  # - LLM compression metrics")
-    print("  # - Final processed results")
-    print("  # Logs saved to: ./logs/web_tools_debug_UUID.json")
-    
-    print("\n📝 Run 'python test_web_tools_llm.py' to test LLM processing capabilities")
-
 
 # ---------------------------------------------------------------------------
 # Registry

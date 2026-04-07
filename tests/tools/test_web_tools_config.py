@@ -308,6 +308,7 @@ class TestBackendSelection:
         "TOOL_GATEWAY_SCHEME",
         "TOOL_GATEWAY_USER_TOKEN",
         "TAVILY_API_KEY",
+        "BRAVE_SEARCH_API_KEY",
     )
 
     def setup_method(self):
@@ -366,6 +367,13 @@ class TestBackendSelection:
         from tools.web_tools import _get_backend
         with patch("tools.web_tools._load_web_config", return_value={"backend": "Tavily"}):
             assert _get_backend() == "tavily"
+
+    def test_config_brave(self):
+        """web.backend=brave in config → 'brave' regardless of other keys."""
+        from tools.web_tools import _get_backend
+        with patch("tools.web_tools._load_web_config", return_value={"backend": "brave"}), \
+             patch.dict(os.environ, {"PARALLEL_API_KEY": "test-key"}):
+            assert _get_backend() == "brave"
 
     # ── Fallback (no web.backend in config) ───────────────────────────
 
@@ -432,6 +440,13 @@ class TestBackendSelection:
         with patch("tools.web_tools._load_web_config", return_value={}):
             assert _get_backend() == "firecrawl"
 
+    def test_fallback_brave_only_key(self):
+        """Only BRAVE_SEARCH_API_KEY set → 'brave'."""
+        from tools.web_tools import _get_backend
+        with patch("tools.web_tools._load_web_config", return_value={}), \
+             patch.dict(os.environ, {"BRAVE_SEARCH_API_KEY": "brave-test"}):
+            assert _get_backend() == "brave"
+
     def test_invalid_config_falls_through_to_fallback(self):
         """web.backend=invalid → ignored, uses key-based fallback."""
         from tools.web_tools import _get_backend
@@ -491,6 +506,30 @@ class TestParallelClientConfig:
             assert client1 is client2
 
 
+class TestBraveSearch:
+    def test_web_search_dispatches_to_brave(self):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "web": {
+                "results": [
+                    {"title": "Brave result", "url": "https://example.com", "description": "desc"}
+                ]
+            }
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("tools.web_tools._get_backend", return_value="brave"), \
+             patch.dict(os.environ, {"BRAVE_SEARCH_API_KEY": "brave-test"}, clear=False), \
+             patch("tools.web_tools.httpx.get", return_value=mock_response) as mock_get, \
+             patch("tools.interrupt.is_interrupted", return_value=False):
+            from tools.web_tools import web_search_tool
+            result = json.loads(web_search_tool("test query", limit=3))
+            assert result["success"] is True
+            assert result["data"]["web"][0]["title"] == "Brave result"
+            assert result["data"]["web"][0]["url"] == "https://example.com"
+            mock_get.assert_called_once()
+
+
 class TestWebSearchErrorHandling:
     """Test suite for web_search_tool() error responses."""
 
@@ -533,6 +572,7 @@ class TestCheckWebApiKey:
         "TOOL_GATEWAY_SCHEME",
         "TOOL_GATEWAY_USER_TOKEN",
         "TAVILY_API_KEY",
+        "BRAVE_SEARCH_API_KEY",
     )
 
     def setup_method(self):
@@ -567,6 +607,11 @@ class TestCheckWebApiKey:
 
     def test_tavily_key_only(self):
         with patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test"}):
+            from tools.web_tools import check_web_api_key
+            assert check_web_api_key() is True
+
+    def test_brave_key_only(self):
+        with patch.dict(os.environ, {"BRAVE_SEARCH_API_KEY": "brave-test"}):
             from tools.web_tools import check_web_api_key
             assert check_web_api_key() is True
 
@@ -615,3 +660,9 @@ def test_web_requires_env_includes_exa_key():
     from tools.web_tools import _web_requires_env
 
     assert "EXA_API_KEY" in _web_requires_env()
+
+
+def test_web_requires_env_includes_brave_key():
+    from tools.web_tools import _web_requires_env
+
+    assert "BRAVE_SEARCH_API_KEY" in _web_requires_env()
