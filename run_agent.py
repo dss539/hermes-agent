@@ -100,6 +100,8 @@ from agent.display import (
     KawaiiSpinner, build_tool_preview as _build_tool_preview,
     get_cute_tool_message as _get_cute_tool_message_impl,
     _detect_tool_failure,
+    get_skin_faces,
+    get_skin_verbs,
     get_tool_emoji as _get_tool_emoji,
 )
 from agent.trajectory import (
@@ -8016,8 +8018,10 @@ class AIAgent:
                 self._vprint(f"{self.log_prefix}   🔧 Available tools: {len(self.tools) if self.tools else 0}")
             else:
                 # Animated thinking spinner in quiet mode
-                face = random.choice(KawaiiSpinner.KAWAII_THINKING)
-                verb = random.choice(KawaiiSpinner.THINKING_VERBS)
+                thinking_faces = get_skin_faces("thinking_faces", KawaiiSpinner.KAWAII_THINKING)
+                thinking_verbs = get_skin_verbs()
+                face = random.choice(thinking_faces)
+                verb = random.choice(thinking_verbs)
                 if self.thinking_callback:
                     # CLI TUI mode: use prompt_toolkit widget instead of raw spinner
                     # (works in both streaming and non-streaming modes)
