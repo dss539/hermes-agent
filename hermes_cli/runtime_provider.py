@@ -34,6 +34,13 @@ def _normalize_custom_provider_name(value: str) -> str:
     return value.strip().lower().replace(" ", "-")
 
 
+def _expand_env_style_secret(value: Any) -> str:
+    raw = str(value or "").strip()
+    if raw.isupper() and "_" in raw:
+        return os.getenv(raw, "").strip()
+    return raw
+
+
 def _detect_api_mode_for_url(base_url: str) -> Optional[str]:
     """Auto-detect api_mode from the resolved base URL.
 
@@ -146,7 +153,7 @@ def _resolve_runtime_from_pool_entry(
 ) -> Dict[str, Any]:
     model_cfg = model_cfg or _get_model_config()
     base_url = (getattr(entry, "runtime_base_url", None) or getattr(entry, "base_url", None) or "").rstrip("/")
-    api_key = getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")
+    api_key = _expand_env_style_secret(getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", ""))
     api_mode = "chat_completions"
     if provider == "openai-codex":
         api_mode = "codex_responses"
@@ -241,7 +248,7 @@ def _try_resolve_from_custom_pool(
         entry = pool.select()
         if entry is None:
             return None
-        pool_api_key = getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")
+        pool_api_key = _expand_env_style_secret(getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", ""))
         if not pool_api_key:
             return None
         return {
@@ -660,7 +667,7 @@ def resolve_runtime_provider(
         entry = pool.select()
         pool_api_key = ""
         if entry is not None:
-            pool_api_key = (
+            pool_api_key = _expand_env_style_secret(
                 getattr(entry, "runtime_api_key", None)
                 or getattr(entry, "access_token", "")
             )

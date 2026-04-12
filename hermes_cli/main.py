@@ -537,14 +537,14 @@ def _probe_container(cmd: list, backend: str, via_sudo: bool = False):
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:
-        label = f"sudo -S -p '' {backend}" if via_sudo else backend
+        label = f"sudo -S -p  -S -p '' {backend}" if via_sudo else backend
         print(
-            f"Error: timed out waiting for {label} to respond.
-"
+            f"Error: timed out waiting for {label} to respond.\n"
             f"The {backend} daemon may be unresponsive or starting up.",
             file=sys.stderr,
         )
         sys.exit(1)
+
 
 
 def _exec_in_container(container_info: dict, cli_args: list):
@@ -588,45 +588,31 @@ def _exec_in_container(container_info: dict, cli_args: list):
             )
             if probe2.returncode != 0:
                 print(
-                    f"Error: container '{container_name}' not found via {backend}.
-"
-                    f"
-"
-                    f"The container is likely running as root. Your user cannot see it
-"
-                    f"because {backend} uses per-user namespaces. Grant passwordless
-"
-                    f"sudo -S -p '' for {backend} — the -n (non-interactive) flag is required
-"
-                    f"because a password prompt would hang or break piped commands.
-"
-                    f"
-"
-                    f"On NixOS:
-"
-                    f"
-"
-                    f'  security.sudo -S -p ''.extraRules = [{{
-'
-                    f'    users = [ "{os.getenv("USER", "your-user")}" ];
-'
-                    f'    commands = [{{ command = "{runtime}"; options = [ "NOPASSWD" ]; }}];
-'
-                    f'  }}];
-'
-                    f"
-"
-                    f"Or run: sudo -S -p '' hermes {' '.join(cli_args)}",
+                    f"Error: container '{container_name}' not found via {backend}.\n"
+                    f"\n"
+                    f"The container is likely running as root. Your user cannot see it\n"
+                    f"because {backend} uses per-user namespaces. Grant passwordless\n"
+                    f"sudo -S -p  for {backend} — the -n (non-interactive) flag is required\n"
+                    f"because a password prompt would hang or break piped commands.\n"
+                    f"\n"
+                    f"On NixOS:\n"
+                    f"\n"
+                    f'  security.sudo -S -p .extraRules = [{{\n'
+                    f'    users = [ "{os.getenv("USER", "your-user")}" ];\n'
+                    f'    commands = [{{ command = "{runtime}"; options = [ "NOPASSWD" ]; }}];\n'
+                    f'  }}];\n'
+                    f"\n"
+                    f"Or run: sudo -S -p  hermes {' '.join(cli_args)}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
         else:
             print(
-                f"Error: container '{container_name}' not found via {backend}.
-"
-                f"The container may be running under root. Try: sudo -S -p '' hermes {' '.join(cli_args)}",
+                f"Error: container '{container_name}' not found via {backend}.\n"
+                f"The container may be running under root. Try: sudo -S -p  hermes {' '.join(cli_args)}",
                 file=sys.stderr,
             )
+            sys.exit(1)
             sys.exit(1)
 
     is_tty = sys.stdin.isatty()

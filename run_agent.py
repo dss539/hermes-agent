@@ -100,8 +100,6 @@ from agent.display import (
     KawaiiSpinner, build_tool_preview as _build_tool_preview,
     get_cute_tool_message as _get_cute_tool_message_impl,
     _detect_tool_failure,
-    get_skin_faces,
-    get_skin_verbs,
     get_tool_emoji as _get_tool_emoji,
 )
 from agent.trajectory import (
@@ -8018,8 +8016,14 @@ class AIAgent:
                 self._vprint(f"{self.log_prefix}   🔧 Available tools: {len(self.tools) if self.tools else 0}")
             else:
                 # Animated thinking spinner in quiet mode
-                thinking_faces = get_skin_faces("thinking_faces", KawaiiSpinner.KAWAII_THINKING)
-                thinking_verbs = get_skin_verbs()
+                try:
+                    from hermes_cli.skin_engine import get_active_skin
+                    _skin = get_active_skin()
+                    thinking_faces = _skin.get_spinner_list("thinking_faces") or KawaiiSpinner.KAWAII_THINKING
+                    thinking_verbs = _skin.get_spinner_list("thinking_verbs") or KawaiiSpinner.THINKING_VERBS
+                except Exception:
+                    thinking_faces = KawaiiSpinner.KAWAII_THINKING
+                    thinking_verbs = KawaiiSpinner.THINKING_VERBS
                 face = random.choice(thinking_faces)
                 verb = random.choice(thinking_verbs)
                 if self.thinking_callback:

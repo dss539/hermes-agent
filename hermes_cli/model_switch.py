@@ -853,7 +853,6 @@ def list_authenticated_providers(
         # Check if credentials exist
         has_creds = pid == current_provider
         if overlay.extra_env_vars:
-        if overlay.extra_env_vars:
             has_creds = any(os.environ.get(ev) for ev in overlay.extra_env_vars)
         # Also check api_key_env_vars from PROVIDER_REGISTRY for api_key auth_type
         if not has_creds and overlay.auth_type == "api_key":

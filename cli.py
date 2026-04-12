@@ -4640,8 +4640,23 @@ class HermesCLI:
                 _cprint("  /model --provider <slug>             switch provider")
                 return
 
+            grouped_providers = self._group_model_display_providers(providers)
+            if not self._app:
+                for p in grouped_providers:
+                    tag = " (current)" if p.get("is_current") else ""
+                    _cprint(f"  {p['name']} [--provider {p['slug']}]{tag}:")
+                    if p.get("models"):
+                        for model_id in p["models"]:
+                            _cprint(f"    {model_id}")
+                    elif p.get("api_url"):
+                        _cprint(f"    {p['api_url']}")
+                    else:
+                        _cprint("    (no models listed)")
+                    _cprint("")
+                return
+
             self._open_model_picker(
-                providers,
+                grouped_providers,
                 model_display,
                 provider_display,
                 user_provs=user_provs,
@@ -4777,6 +4792,7 @@ class HermesCLI:
             normalize_provider, _PROVIDER_LABELS,
         )
         from hermes_cli.auth import resolve_provider as _resolve_provider
+        from hermes_cli.config import load_config
         from hermes_cli.model_switch import list_authenticated_providers
 
         # Resolve current provider
