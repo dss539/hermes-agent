@@ -1253,7 +1253,10 @@ class DiscordAdapter(BasePlatformAdapter):
                         pass
 
                 completed = receiver.check_silence()
+                if completed:
+                    logger.info("Voice listen loop completed utterances: guild_id=%s count=%s", guild_id, len(completed))
                 for user_id, pcm_data in completed:
+                    logger.info("Voice utterance ready: guild_id=%s user_id=%s pcm_bytes=%s", guild_id, user_id, len(pcm_data))
                     if not self._is_allowed_user(str(user_id)):
                         continue
                     await self._process_voice_input(guild_id, user_id, pcm_data)
@@ -1264,6 +1267,7 @@ class DiscordAdapter(BasePlatformAdapter):
 
     async def _process_voice_input(self, guild_id: int, user_id: int, pcm_data: bytes):
         """Convert PCM -> WAV -> STT -> callback."""
+        logger.info("Process voice input: guild_id=%s user_id=%s pcm_bytes=%s realtime=%s", guild_id, user_id, len(pcm_data), bool(self._voice_audio_callback))
         if self._voice_audio_callback:
             try:
                 await self._voice_audio_callback(
@@ -1286,9 +1290,22 @@ class DiscordAdapter(BasePlatformAdapter):
         tmp_f.close()
         try:
             await asyncio.to_thread(VoiceReceiver.pcm_to_wav, pcm_data, wav_path)
+            try:
+                import wave, audioop
+                with wave.open(wav_path, 'rb') as wf:
+                    wav_frames = wf.readframes(wf.getnframes())
+                    wav_rate = wf.getframerate()
+                    wav_channels = wf.getnchannels()
+                    wav_width = wf.getsampwidth()
+                rms = audioop.rms(wav_frames, wav_width) if wav_frames else 0
+                peak = audioop.max(wav_frames, wav_width) if wav_frames else 0
+                logger.info("Voice WAV stats: guild_id=%s user_id=%s rate=%s channels=%s width=%s frames=%s rms=%s peak=%s", guild_id, user_id, wav_rate, wav_channels, wav_width, len(wav_frames), rms, peak)
+            except Exception as stats_err:
+                logger.debug("Voice WAV stats failed: %s", stats_err)
 
             from tools.transcription_tools import transcribe_audio
             result = await asyncio.to_thread(transcribe_audio, wav_path)
+            logger.info("Voice transcription result: guild_id=%s user_id=%s success=%s provider=%s transcript_len=%s error=%s", guild_id, user_id, result.get('success'), result.get('provider'), len(result.get('transcript','') or ''), result.get('error'))
 
             if not result.get("success"):
                 return
@@ -1649,9 +1666,20 @@ class DiscordAdapter(BasePlatformAdapter):
         the "thinking..." indicator is replaced with that text; otherwise it
         is deleted so the channel isn't cluttered.
         """
+        logger.info("Discord slash received: command_text=%s user_id=%s channel_id=%s guild_id=%s", command_text, getattr(interaction.user, 'id', None), getattr(interaction, 'channel_id', None), getattr(interaction, 'guild_id', None))
         await interaction.response.defer(ephemeral=True)
         event = self._build_slash_event(interaction, command_text)
-        await self.handle_message(event)
+        try:
+            logger.info("Discord slash dispatching: command_text=%s event_chat_id=%s event_user_id=%s", command_text, event.source.chat_id, event.source.user_id)
+            await self.handle_message(event)
+            logger.info("Discord slash dispatched successfully: command_text=%s", command_text)
+        except Exception as e:
+            logger.exception("Discord slash dispatch failed: command_text=%s error=%s", command_text, e)
+            try:
+                await interaction.edit_original_response(content=f"Slash command failed: {e}")
+            except Exception:
+                pass
+            return
         try:
             if followup_msg:
                 await interaction.edit_original_response(content=followup_msg)

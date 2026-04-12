@@ -140,6 +140,30 @@ class TestQueueMessageStorage:
 
         assert adapter.has_pending_interrupt(session_key)
 
+    @pytest.mark.asyncio
+    async def test_voice_command_bypasses_active_session_guard(self):
+        """/voice should execute immediately even if a session is active."""
+        adapter = _StubAdapter()
+        source = MagicMock(chat_id="123", platform=Platform.TELEGRAM, thread_id=None)
+        event = MessageEvent(
+            text="/voice channel",
+            message_type=MessageType.COMMAND,
+            source=source,
+            message_id="voice1",
+        )
+        session_key = "telegram:user:123"
+        adapter._active_sessions[session_key] = asyncio.Event()
+        adapter._message_handler = AsyncMock(return_value="Joined voice channel **General**.")
+        adapter._send_with_retry = AsyncMock()
+
+        with patch("gateway.platforms.base.build_session_key", return_value=session_key):
+            await adapter.handle_message(event)
+
+        adapter._message_handler.assert_awaited_once_with(event)
+        adapter._send_with_retry.assert_awaited_once()
+        assert session_key in adapter._active_sessions
+        assert not adapter._active_sessions[session_key].is_set()
+
 
 class TestQueueConsumptionAfterCompletion:
     """Verify that pending messages are consumed after normal completion."""

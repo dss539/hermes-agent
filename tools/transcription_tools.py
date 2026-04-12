@@ -36,6 +36,7 @@ from urllib.parse import urljoin
 from utils import is_truthy_value
 from tools.managed_tool_gateway import resolve_managed_tool_gateway
 from tools.tool_backend_helpers import managed_nous_tools_enabled, resolve_openai_audio_api_key
+from hermes_cli.auth import _codex_access_token_is_expiring, _read_codex_tokens, _refresh_codex_auth_tokens
 
 from hermes_constants import get_hermes_home
 
@@ -666,7 +667,7 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
 
 
 def _resolve_openai_audio_client_config() -> tuple[str, str]:
-    """Return direct OpenAI audio config or a managed gateway fallback."""
+    """Return direct OpenAI audio config, Codex OAuth fallback, or a managed gateway."""
     stt_config = _load_stt_config()
     openai_cfg = stt_config.get("openai", {})
     cfg_api_key = openai_cfg.get("api_key", "")
@@ -677,6 +678,21 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
     direct_api_key = resolve_openai_audio_api_key()
     if direct_api_key:
         return direct_api_key, OPENAI_BASE_URL
+
+    # In this environment, the stored Codex OAuth token is also accepted by
+    # OpenAI audio/realtime endpoints. Use it as a first-party OpenAI fallback
+    # before giving up or routing through a managed gateway.
+    try:
+        data = _read_codex_tokens()
+        tokens = dict(data.get("tokens") or {})
+        access_token = str(tokens.get("access_token", "") or "").strip()
+        if _codex_access_token_is_expiring(access_token, 60):
+            tokens = _refresh_codex_auth_tokens(tokens, 20.0)
+            access_token = str(tokens.get("access_token", "") or "").strip()
+        if access_token:
+            return access_token, OPENAI_BASE_URL
+    except Exception:
+        pass
 
     managed_gateway = resolve_managed_tool_gateway("openai-audio")
     if managed_gateway is None:

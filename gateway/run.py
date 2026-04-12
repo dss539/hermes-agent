@@ -2579,6 +2579,7 @@ class GatewayRunner:
 
         # Check for commands
         command = event.get_command()
+        logger.info("Gateway command parse: text=%r command=%r args=%r platform=%s chat_id=%s", event.text, command, event.get_command_args() if command else None, source.platform.value if source.platform else None, source.chat_id)
         
         # Emit command:* hook for any recognized slash command.
         # GATEWAY_KNOWN_COMMANDS is derived from the central COMMAND_REGISTRY
@@ -2709,6 +2710,7 @@ class GatewayRunner:
             return await self._handle_btw_command(event)
 
         if canonical == "voice":
+            logger.info("Gateway command dispatch: canonical=voice text=%r", event.text)
             return await self._handle_voice_command(event)
 
         if self._draining:
@@ -4776,6 +4778,7 @@ class GatewayRunner:
 
     async def _handle_voice_channel_join(self, event: MessageEvent) -> str:
         """Join the user's current Discord voice channel."""
+        logger.info("Voice join requested: platform=%s chat_id=%s user_id=%s raw_guild_id=%s", event.source.platform, event.source.chat_id, event.source.user_id, getattr(getattr(event, 'raw_message', None), 'guild_id', None))
         adapter = self.adapters.get(event.source.platform)
         if not hasattr(adapter, "join_voice_channel"):
             return "Voice channels are not supported on this platform."
@@ -4787,6 +4790,7 @@ class GatewayRunner:
         voice_channel = await adapter.get_user_voice_channel(
             guild_id, event.source.user_id
         )
+        logger.info("Voice join lookup: guild_id=%s user_id=%s voice_channel=%s", guild_id, event.source.user_id, getattr(voice_channel, 'id', None))
         if not voice_channel:
             return "You need to be in a voice channel first."
 
@@ -4805,7 +4809,9 @@ class GatewayRunner:
             adapter._on_voice_disconnect = self._handle_voice_timeout_cleanup
 
         try:
+            logger.info("Voice join attempting connect: guild_id=%s channel_id=%s channel_name=%s", guild_id, getattr(voice_channel, 'id', None), getattr(voice_channel, 'name', None))
             success = await adapter.join_voice_channel(voice_channel)
+            logger.info("Voice join result: guild_id=%s success=%s", guild_id, success)
         except Exception as e:
             logger.warning("Failed to join voice channel: %s", e)
             adapter._voice_input_callback = None
