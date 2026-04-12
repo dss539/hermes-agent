@@ -711,6 +711,27 @@ class TestVoiceChannelCommands:
         assert runner._voice_mode["123"] == "all"
 
     @pytest.mark.asyncio
+    async def test_join_success_wires_realtime_audio_callback_when_enabled(self, runner, monkeypatch):
+        mock_channel = MagicMock()
+        mock_channel.name = "General"
+        mock_adapter = AsyncMock()
+        mock_adapter.join_voice_channel = AsyncMock(return_value=True)
+        mock_adapter.get_user_voice_channel = AsyncMock(return_value=mock_channel)
+        mock_adapter._voice_text_channels = {}
+        mock_adapter._voice_input_callback = None
+        mock_adapter._voice_audio_callback = None
+        mock_adapter.handle_realtime_voice_input = AsyncMock()
+        event = self._make_discord_event()
+        runner.adapters[event.source.platform] = mock_adapter
+        monkeypatch.setenv("DISCORD_VOICE_REALTIME", "true")
+
+        result = await runner._handle_voice_channel_join(event)
+
+        assert "joined" in result.lower()
+        assert mock_adapter._voice_audio_callback == mock_adapter.handle_realtime_voice_input
+        assert mock_adapter._voice_input_callback is None
+
+    @pytest.mark.asyncio
     async def test_join_failure(self, runner):
         """Failed join returns permissions error."""
         mock_channel = MagicMock()
@@ -896,6 +917,8 @@ class TestDiscordVoiceChannelMethods:
         adapter._voice_receivers = {}
         adapter._voice_listen_tasks = {}
         adapter._voice_input_callback = None
+        adapter._voice_audio_callback = None
+        adapter._voice_realtime_sessions = {}
         adapter._allowed_user_ids = set()
         adapter._running = True
         return adapter
@@ -1029,6 +1052,18 @@ class TestDiscordVoiceChannelMethods:
         callback.assert_called_once_with(guild_id=111, user_id=42, transcript="Hello")
 
     @pytest.mark.asyncio
+    async def test_process_voice_input_routes_to_audio_callback_when_present(self):
+        adapter = self._make_adapter()
+        callback = AsyncMock()
+        adapter._voice_audio_callback = callback
+        adapter._voice_input_callback = AsyncMock()
+
+        await adapter._process_voice_input(111, 42, b"\x00" * 96000)
+
+        callback.assert_called_once_with(guild_id=111, user_id=42, pcm_data=b"\x00" * 96000)
+        adapter._voice_input_callback.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_process_voice_input_hallucination_filtered(self):
         """Whisper hallucination is filtered out."""
         adapter = self._make_adapter()
@@ -1067,6 +1102,25 @@ class TestDiscordVoiceChannelMethods:
                    side_effect=RuntimeError("ffmpeg not found")):
             await adapter._process_voice_input(111, 42, b"\x00" * 96000)
         # Should not raise
+
+    @pytest.mark.asyncio
+    async def test_handle_realtime_voice_input_plays_reply_and_cleans_tempfile(self):
+        adapter = self._make_adapter()
+        adapter.play_in_voice_channel = AsyncMock(return_value=True)
+        fake_session = AsyncMock()
+        fake_session.process_turn = AsyncMock(return_value={
+            "audio_path": "/tmp/realtime_reply.wav",
+            "input_transcript": "hello",
+            "output_transcript": "hi there",
+        })
+        adapter._voice_realtime_sessions[111] = fake_session
+
+        with patch("gateway.platforms.discord.os.unlink") as mock_unlink:
+            await adapter.handle_realtime_voice_input(111, 42, b"\x00" * 96000)
+
+        fake_session.process_turn.assert_called_once()
+        adapter.play_in_voice_channel.assert_called_once_with(111, "/tmp/realtime_reply.wav")
+        mock_unlink.assert_called_once_with("/tmp/realtime_reply.wav")
 
 
 # =====================================================================

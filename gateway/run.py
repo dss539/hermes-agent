@@ -4792,8 +4792,15 @@ class GatewayRunner:
 
         # Wire callbacks BEFORE join so voice input arriving immediately
         # after connection is not lost.
-        if hasattr(adapter, "_voice_input_callback"):
+        use_realtime_voice = (os.getenv("DISCORD_VOICE_REALTIME", "").strip().lower() in {"1", "true", "yes", "on"})
+        if use_realtime_voice and hasattr(adapter, "handle_realtime_voice_input") and hasattr(adapter, "_voice_audio_callback"):
+            adapter._voice_audio_callback = adapter.handle_realtime_voice_input
+            if hasattr(adapter, "_voice_input_callback"):
+                adapter._voice_input_callback = None
+        elif hasattr(adapter, "_voice_input_callback"):
             adapter._voice_input_callback = self._handle_voice_channel_input
+            if hasattr(adapter, "_voice_audio_callback"):
+                adapter._voice_audio_callback = None
         if hasattr(adapter, "_on_voice_disconnect"):
             adapter._on_voice_disconnect = self._handle_voice_timeout_cleanup
 
@@ -4802,6 +4809,8 @@ class GatewayRunner:
         except Exception as e:
             logger.warning("Failed to join voice channel: %s", e)
             adapter._voice_input_callback = None
+            if hasattr(adapter, "_voice_audio_callback"):
+                adapter._voice_audio_callback = None
             err_lower = str(e).lower()
             if "pynacl" in err_lower or "nacl" in err_lower or "davey" in err_lower:
                 return (
@@ -4822,6 +4831,8 @@ class GatewayRunner:
             )
         # Join failed — clear callback
         adapter._voice_input_callback = None
+        if hasattr(adapter, "_voice_audio_callback"):
+            adapter._voice_audio_callback = None
         return "Failed to join voice channel. Check bot permissions (Connect + Speak)."
 
     async def _handle_voice_channel_leave(self, event: MessageEvent) -> str:
@@ -4845,6 +4856,8 @@ class GatewayRunner:
         self._set_adapter_auto_tts_disabled(adapter, event.source.chat_id, disabled=True)
         if hasattr(adapter, "_voice_input_callback"):
             adapter._voice_input_callback = None
+        if hasattr(adapter, "_voice_audio_callback"):
+            adapter._voice_audio_callback = None
         return "Left voice channel."
 
     def _handle_voice_timeout_cleanup(self, chat_id: str) -> None:

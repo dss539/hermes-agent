@@ -447,7 +447,9 @@ class DiscordAdapter(BasePlatformAdapter):
         self._voice_receivers: Dict[int, VoiceReceiver] = {}  # guild_id -> VoiceReceiver
         self._voice_listen_tasks: Dict[int, asyncio.Task] = {}  # guild_id -> listen loop
         self._voice_input_callback: Optional[Callable] = None  # set by run.py
+        self._voice_audio_callback: Optional[Callable] = None  # set by run.py for Realtime mode
         self._on_voice_disconnect: Optional[Callable] = None  # set by run.py
+        self._voice_realtime_sessions: Dict[int, Any] = {}  # guild_id -> OpenAIRealtimeVoiceSession
         # Track threads where the bot has participated so follow-up messages
         # in those threads don't require @mention.  Persisted to disk so the
         # set survives gateway restarts.
@@ -1034,6 +1036,12 @@ class DiscordAdapter(BasePlatformAdapter):
         receiver = self._voice_receivers.pop(guild_id, None)
         if receiver:
             receiver.stop()
+        realtime_session = self._voice_realtime_sessions.pop(guild_id, None)
+        if realtime_session:
+            try:
+                await realtime_session.close()
+            except Exception:
+                pass
         listen_task = self._voice_listen_tasks.pop(guild_id, None)
         if listen_task:
             listen_task.cancel()
@@ -1251,6 +1259,21 @@ class DiscordAdapter(BasePlatformAdapter):
 
     async def _process_voice_input(self, guild_id: int, user_id: int, pcm_data: bytes):
         """Convert PCM -> WAV -> STT -> callback."""
+        if self._voice_audio_callback:
+            try:
+                await self._voice_audio_callback(
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    pcm_data=pcm_data,
+                )
+                return
+            except Exception as e:
+                logger.warning(
+                    "Realtime voice callback failed; falling back to classic STT pipeline: %s",
+                    e,
+                    exc_info=True,
+                )
+
         from tools.voice_mode import is_whisper_hallucination
 
         tmp_f = tempfile.NamedTemporaryFile(suffix=".wav", prefix="vc_listen_", delete=False)
@@ -1281,6 +1304,44 @@ class DiscordAdapter(BasePlatformAdapter):
         finally:
             try:
                 os.unlink(wav_path)
+            except OSError:
+                pass
+
+    async def handle_realtime_voice_input(self, guild_id: int, user_id: int, pcm_data: bytes):
+        """Send a completed Discord utterance through OpenAI Realtime and play the reply."""
+        from gateway.realtime_voice import OpenAIRealtimeVoiceSession
+
+        session = self._voice_realtime_sessions.get(guild_id)
+        if session is None:
+            session = OpenAIRealtimeVoiceSession(
+                model=os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime"),
+                voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
+                instructions=os.getenv(
+                    "OPENAI_REALTIME_INSTRUCTIONS",
+                    "You are Hermes in a live voice conversation. Speak naturally, briefly, and conversationally. "
+                    "Prefer short spoken answers unless asked for more detail. If interrupted, yield immediately.",
+                ),
+            )
+            self._voice_realtime_sessions[guild_id] = session
+
+        result = await session.process_turn(pcm_data)
+        input_transcript = result.get("input_transcript", "")
+        output_transcript = result.get("output_transcript", "")
+        audio_path = result.get("audio_path", "")
+
+        if input_transcript:
+            logger.info("Realtime voice input from user %d: %s", user_id, input_transcript[:120])
+        if output_transcript:
+            logger.info("Realtime voice reply transcript: %s", output_transcript[:120])
+
+        if not audio_path:
+            return
+
+        try:
+            await self.play_in_voice_channel(guild_id, audio_path)
+        finally:
+            try:
+                os.unlink(audio_path)
             except OSError:
                 pass
 

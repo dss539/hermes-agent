@@ -589,6 +589,14 @@ def load_gateway_config() -> GatewayConfig:
                     os.environ["DISCORD_AUTO_THREAD"] = str(discord_cfg["auto_thread"]).lower()
                 if "reactions" in discord_cfg and not os.getenv("DISCORD_REACTIONS"):
                     os.environ["DISCORD_REACTIONS"] = str(discord_cfg["reactions"]).lower()
+                if "voice_realtime" in discord_cfg and not os.getenv("DISCORD_VOICE_REALTIME"):
+                    os.environ["DISCORD_VOICE_REALTIME"] = str(discord_cfg["voice_realtime"]).lower()
+                if "realtime_model" in discord_cfg and not os.getenv("OPENAI_REALTIME_MODEL"):
+                    os.environ["OPENAI_REALTIME_MODEL"] = str(discord_cfg["realtime_model"])
+                if "realtime_voice" in discord_cfg and not os.getenv("OPENAI_REALTIME_VOICE"):
+                    os.environ["OPENAI_REALTIME_VOICE"] = str(discord_cfg["realtime_voice"])
+                if "realtime_instructions" in discord_cfg and not os.getenv("OPENAI_REALTIME_INSTRUCTIONS"):
+                    os.environ["OPENAI_REALTIME_INSTRUCTIONS"] = str(discord_cfg["realtime_instructions"])
                 # ignored_channels: channels where bot never responds (even when mentioned)
                 ic = discord_cfg.get("ignored_channels")
                 if ic is not None and not os.getenv("DISCORD_IGNORED_CHANNELS"):
