@@ -4904,22 +4904,22 @@ class GatewayRunner:
             logger.debug("Unauthorized voice input from user %d, ignoring", user_id)
             return
 
-        # Show transcript in text channel (after auth, with mention sanitization)
-        try:
-            channel = adapter._client.get_channel(text_ch_id)
-            if channel:
-                safe_text = transcript[:2000].replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
-                await channel.send(f"**[Voice]** <@{user_id}>: {safe_text}")
-        except Exception:
-            pass
+        # Do not echo the transcript into the linked text channel by default.
+        # Voice conversations should feel like voice, not like the user is also
+        # typing their words into chat. If we ever want transcript mirroring
+        # again, make it opt-in via config/env.
 
-        # Build a synthetic MessageEvent and feed through the normal pipeline
-        # Use SimpleNamespace as raw_message so _get_guild_id() can extract
-        # guild_id and _send_voice_reply() plays audio in the voice channel.
+        # Build a synthetic MessageEvent and feed through the normal pipeline.
+        # Keep the event as VOICE and explicitly mark that the user is speaking
+        # aloud so the agent doesn't treat this like ordinary typed text.
         from types import SimpleNamespace
+        voice_prompt_text = (
+            "[Voice transcript — the user is speaking aloud in Discord voice chat, not typing] "
+            f"{transcript}"
+        )
         event = MessageEvent(
             source=source,
-            text=transcript,
+            text=voice_prompt_text,
             message_type=MessageType.VOICE,
             raw_message=SimpleNamespace(guild_id=guild_id, guild=None),
         )

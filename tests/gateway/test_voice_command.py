@@ -868,14 +868,14 @@ class TestVoiceChannelCommands:
         await runner._handle_voice_channel_input(111, 42, "Hello from VC")
         mock_adapter.handle_message.assert_called_once()
         event = mock_adapter.handle_message.call_args[0][0]
-        assert event.text == "Hello from VC"
+        assert event.text == "[Voice transcript — the user is speaking aloud in Discord voice chat, not typing] Hello from VC"
         assert event.message_type == MessageType.VOICE
         assert event.source.chat_id == "123"
         assert event.source.chat_type == "channel"
 
     @pytest.mark.asyncio
-    async def test_input_posts_transcript_in_text_channel(self, runner):
-        """Voice input sends transcript message to text channel."""
+    async def test_input_does_not_post_transcript_in_text_channel_by_default(self, runner):
+        """Voice input should not echo the transcript into the text channel by default."""
         from gateway.config import Platform
         mock_adapter = AsyncMock()
         mock_adapter._voice_text_channels = {111: 123}
@@ -885,10 +885,7 @@ class TestVoiceChannelCommands:
         mock_adapter.handle_message = AsyncMock()
         runner.adapters[Platform.DISCORD] = mock_adapter
         await runner._handle_voice_channel_input(111, 42, "Test transcript")
-        mock_channel.send.assert_called_once()
-        msg = mock_channel.send.call_args[0][0]
-        assert "Test transcript" in msg
-        assert "42" in msg  # user_id in mention
+        mock_channel.send.assert_not_called()
 
     # -- _get_guild_id --
 
