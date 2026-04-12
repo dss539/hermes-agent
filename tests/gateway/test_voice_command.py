@@ -401,6 +401,30 @@ class TestSendVoiceReply:
 
 
 # =====================================================================
+# Discord adapter voice-channel lookup
+# =====================================================================
+
+class TestDiscordAdapterVoiceLookup:
+    @pytest.mark.asyncio
+    async def test_get_user_voice_channel_fetches_member_when_not_cached(self):
+        from gateway.platforms.discord import DiscordAdapter
+
+        adapter = object.__new__(DiscordAdapter)
+        fetched_member = SimpleNamespace(voice=SimpleNamespace(channel="vc42"))
+        guild = MagicMock()
+        guild.get_member.return_value = None
+        guild.fetch_member = AsyncMock(return_value=fetched_member)
+        client = MagicMock()
+        client.get_guild.return_value = guild
+        adapter._client = client
+
+        result = await adapter.get_user_voice_channel(111, "222")
+
+        assert result == "vc42"
+        guild.fetch_member.assert_awaited_once_with(222)
+
+
+# =====================================================================
 # Discord play_tts skip when in voice channel
 # =====================================================================
 

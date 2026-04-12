@@ -1108,6 +1108,11 @@ class DiscordAdapter(BasePlatformAdapter):
         if not guild:
             return None
         member = guild.get_member(int(user_id))
+        if not member:
+            try:
+                member = await guild.fetch_member(int(user_id))
+            except Exception:
+                member = None
         if not member or not member.voice:
             return None
         return member.voice.channel
