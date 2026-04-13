@@ -1627,8 +1627,22 @@ class BasePlatformAdapter(ABC):
                         except OSError:
                             pass
 
-                # Send the text portion
+                # Send the text portion unless this is an active Discord voice-channel
+                # conversation, in which case replies should be voice-only.
+                _suppress_text_reply = False
                 if text_content:
+                    adapter = self.adapters.get(event.source.platform)
+                    guild_id = self._get_guild_id(event) if hasattr(self, '_get_guild_id') else None
+                    if (
+                        event.message_type == MessageType.VOICE
+                        and guild_id
+                        and adapter
+                        and hasattr(adapter, "is_in_voice_channel")
+                        and adapter.is_in_voice_channel(guild_id)
+                    ):
+                        _suppress_text_reply = True
+
+                if text_content and not _suppress_text_reply:
                     logger.info("[%s] Sending response (%d chars) to %s", self.name, len(text_content), event.source.chat_id)
                     result = await self._send_with_retry(
                         chat_id=event.source.chat_id,

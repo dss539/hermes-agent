@@ -304,6 +304,15 @@ class TestAutoVoiceReply:
         """Discord VC + voice_only + voice: base adapter handles."""
         assert self._call(runner, "voice_only", MessageType.VOICE, in_voice_channel=True) is False
 
+    def test_discord_vc_voice_conversation_should_suppress_text_reply(self, runner):
+        """When actively in a Discord voice channel, the normal text reply should be suppressed."""
+        event = _make_event(message_type=MessageType.VOICE)
+        event.raw_message = SimpleNamespace(guild_id=111, guild=None)
+        mock_adapter = MagicMock()
+        mock_adapter.is_in_voice_channel = MagicMock(return_value=True)
+        runner.adapters[event.source.platform] = mock_adapter
+        assert runner._should_send_voice_reply(event, "Hello!", []) is False
+
     # -- Edge cases --------------------------------------------------------
 
     def test_error_response_skipped(self, runner):
