@@ -1616,11 +1616,12 @@ class BasePlatformAdapter(ABC):
                 # Play TTS audio before text (voice-first experience)
                 if _tts_path and Path(_tts_path).exists():
                     try:
-                        await self.play_tts(
+                        _tts_result = await self.play_tts(
                             chat_id=event.source.chat_id,
                             audio_path=_tts_path,
                             metadata=_thread_metadata,
                         )
+                        _record_delivery(_tts_result)
                     finally:
                         try:
                             os.remove(_tts_path)
@@ -1631,14 +1632,19 @@ class BasePlatformAdapter(ABC):
                 # conversation, in which case replies should be voice-only.
                 _suppress_text_reply = False
                 if text_content:
-                    adapter = self.adapters.get(event.source.platform)
-                    guild_id = self._get_guild_id(event) if hasattr(self, '_get_guild_id') else None
+                    guild_id = None
+                    raw = getattr(event, "raw_message", None)
+                    if raw is not None:
+                        guild_id = getattr(raw, "guild_id", None)
+                        if guild_id is None:
+                            guild = getattr(raw, "guild", None)
+                            guild_id = getattr(guild, "id", None) if guild is not None else None
                     if (
                         event.message_type == MessageType.VOICE
                         and guild_id
-                        and adapter
-                        and hasattr(adapter, "is_in_voice_channel")
-                        and adapter.is_in_voice_channel(guild_id)
+                        and getattr(self, "platform", None) == Platform.DISCORD
+                        and hasattr(self, "is_in_voice_channel")
+                        and self.is_in_voice_channel(guild_id)
                     ):
                         _suppress_text_reply = True
 

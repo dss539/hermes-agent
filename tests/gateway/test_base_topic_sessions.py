@@ -2,11 +2,12 @@
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from gateway.config import Platform, PlatformConfig
-from gateway.platforms.base import BasePlatformAdapter, MessageEvent, ProcessingOutcome, SendResult
+from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, ProcessingOutcome, SendResult
 from gateway.session import SessionSource, build_session_key
 
 
@@ -46,6 +47,16 @@ class DummyTelegramAdapter(BasePlatformAdapter):
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
         self.processing_hooks.append(("complete", event.message_id, outcome))
+
+
+class DummyDiscordVoiceAdapter(DummyTelegramAdapter):
+    def __init__(self):
+        super().__init__()
+        self.platform = Platform.DISCORD
+        self._voice_connected_guilds = set()
+
+    def is_in_voice_channel(self, guild_id: int) -> bool:
+        return guild_id in self._voice_connected_guilds
 
 
 def _make_event(chat_id: str, thread_id: str, message_id: str = "1") -> MessageEvent:
@@ -169,6 +180,51 @@ class TestBasePlatformTopicSessions:
         assert adapter.processing_hooks == [
             ("start", "1"),
             ("complete", "1", ProcessingOutcome.FAILURE),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_process_message_background_suppresses_text_reply_for_discord_voice_channel(self, monkeypatch, tmp_path):
+        adapter = DummyDiscordVoiceAdapter()
+        adapter._voice_connected_guilds.add(555)
+
+        async def handler(_event):
+            await asyncio.sleep(0)
+            return "spoken only"
+
+        async def hold_typing(_chat_id, interval=2.0, metadata=None):
+            await asyncio.Event().wait()
+
+        def fake_tts_tool(text: str, output_path: str = None, **_kwargs):
+            p = tmp_path / "voice.ogg"
+            p.write_bytes(b"fake-voice")
+            import json
+            return json.dumps({"success": True, "file_path": str(p)})
+
+        adapter.set_message_handler(handler)
+        adapter._keep_typing = hold_typing
+        adapter.play_tts = AsyncMock(return_value=SendResult(success=True, message_id="voice-1"))
+        monkeypatch.setattr("tools.tts_tool.check_tts_requirements", lambda: True)
+        monkeypatch.setattr("tools.tts_tool.text_to_speech_tool", fake_tts_tool)
+
+        event = MessageEvent(
+            text="[Voice transcript — the user is speaking aloud in Discord voice chat, not typing] hello",
+            message_type=MessageType.VOICE,
+            source=SessionSource(
+                platform=Platform.DISCORD,
+                chat_id="123",
+                chat_type="channel",
+            ),
+            message_id="voice-1",
+            raw_message=SimpleNamespace(guild_id=555, guild=None),
+        )
+
+        await adapter._process_message_background(event, build_session_key(event.source))
+
+        assert all(entry["content"] != "spoken only" for entry in adapter.sent)
+        adapter.play_tts.assert_awaited_once()
+        assert adapter.processing_hooks == [
+            ("start", "voice-1"),
+            ("complete", "voice-1", ProcessingOutcome.SUCCESS),
         ]
 
     @pytest.mark.asyncio
