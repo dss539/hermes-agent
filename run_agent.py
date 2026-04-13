@@ -8016,16 +8016,8 @@ class AIAgent:
                 self._vprint(f"{self.log_prefix}   🔧 Available tools: {len(self.tools) if self.tools else 0}")
             else:
                 # Animated thinking spinner in quiet mode
-                try:
-                    from hermes_cli.skin_engine import get_active_skin
-                    _skin = get_active_skin()
-                    thinking_faces = _skin.get_spinner_list("thinking_faces") or KawaiiSpinner.KAWAII_THINKING
-                    thinking_verbs = _skin.get_spinner_list("thinking_verbs") or KawaiiSpinner.THINKING_VERBS
-                except Exception:
-                    thinking_faces = KawaiiSpinner.KAWAII_THINKING
-                    thinking_verbs = KawaiiSpinner.THINKING_VERBS
-                face = random.choice(thinking_faces)
-                verb = random.choice(thinking_verbs)
+                face = random.choice(KawaiiSpinner.KAWAII_THINKING)
+                verb = random.choice(KawaiiSpinner.THINKING_VERBS)
                 if self.thinking_callback:
                     # CLI TUI mode: use prompt_toolkit widget instead of raw spinner
                     # (works in both streaming and non-streaming modes)

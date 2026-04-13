@@ -10,7 +10,6 @@ import json
 import logging
 import re
 import uuid
-from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
@@ -83,17 +82,6 @@ def agent_with_memory_tool():
         )
         a.client = MagicMock()
         return a
-
-
-@contextmanager
-def _active_skin(name: str):
-    from hermes_cli.skin_engine import set_active_skin
-
-    set_active_skin(name)
-    try:
-        yield
-    finally:
-        set_active_skin("default")
 
 
 def test_aiagent_reuses_existing_errors_log_handler():
@@ -1705,48 +1693,6 @@ class TestRunConversation:
         assert result["final_response"] == "Got it"
         assert result["completed"] is True
         assert result["api_calls"] == 2
-
-    def test_thinking_callback_uses_active_skin_spinner_text(self, agent, monkeypatch):
-        self._setup_agent(agent)
-        resp = _mock_response(content="Final answer", finish_reason="stop")
-        agent.client.chat.completions.create.return_value = resp
-        thinking_updates = []
-        agent.thinking_callback = thinking_updates.append
-        monkeypatch.setattr(run_agent.random, "choice", lambda seq: seq[0])
-
-        with _active_skin("ares"):
-            with (
-                patch.object(agent, "_persist_session"),
-                patch.object(agent, "_save_trajectory"),
-                patch.object(agent, "_cleanup_task_resources"),
-            ):
-                result = agent.run_conversation("hello")
-
-        assert result["final_response"] == "Final answer"
-        assert thinking_updates[0] == "(⚔) forging..."
-        assert thinking_updates[-1] == ""
-
-    def test_thinking_callback_falls_back_to_default_spinner_text(self, agent, monkeypatch):
-        self._setup_agent(agent)
-        resp = _mock_response(content="Final answer", finish_reason="stop")
-        agent.client.chat.completions.create.return_value = resp
-        thinking_updates = []
-        agent.thinking_callback = thinking_updates.append
-        monkeypatch.setattr(run_agent.random, "choice", lambda seq: seq[0])
-
-        with _active_skin("default"):
-            with (
-                patch.object(agent, "_persist_session"),
-                patch.object(agent, "_save_trajectory"),
-                patch.object(agent, "_cleanup_task_resources"),
-            ):
-                result = agent.run_conversation("hello")
-
-        from agent.display import KawaiiSpinner
-
-        assert result["final_response"] == "Final answer"
-        assert thinking_updates[0] == f"{KawaiiSpinner.KAWAII_THINKING[0]} {KawaiiSpinner.THINKING_VERBS[0]}..."
-        assert thinking_updates[-1] == ""
 
     def test_inline_think_blocks_reasoning_only_accepted(self, agent):
         """Inline <think> reasoning-only responses accepted with (empty) content, no retries."""
