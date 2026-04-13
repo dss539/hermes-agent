@@ -427,6 +427,7 @@ def switch_model(
     """
     from hermes_cli.models import (
         detect_provider_for_model,
+        probe_api_models,
         validate_requested_model,
         opencode_model_api_mode,
     )
@@ -580,16 +581,23 @@ def switch_model(
                                 break
 
         # --- Step e: detect_provider_for_model() as last resort ---
-        _base = current_base_url or ""
-        is_custom = current_provider in ("custom", "local") or (
-            "localhost" in _base or "127.0.0.1" in _base
+        _base = (current_base_url or "").lower()
+        is_custom_like = (
+            current_provider in ("custom", "local")
+            or current_provider.startswith("custom:")
+            or "localhost" in _base
+            or "127.0.0.1" in _base
         )
 
-        if (
-            target_provider == current_provider
-            and not is_custom
-            and not resolved_alias
-        ):
+        should_detect = target_provider == current_provider and not resolved_alias
+        if should_detect and is_custom_like:
+            probe = probe_api_models(current_api_key, current_base_url)
+            current_models = probe.get("models")
+            if current_models is not None:
+                current_model_names = {str(model).lower() for model in current_models}
+                should_detect = new_model.lower() not in current_model_names
+
+        if should_detect:
             detected = detect_provider_for_model(new_model, current_provider)
             if detected:
                 target_provider, new_model = detected
@@ -631,6 +639,11 @@ def switch_model(
                     f"'{provider_label}': {e}"
                 ),
             )
+    elif target_provider in {"custom", "local"} or target_provider.startswith("custom:"):
+        # Preserve the live endpoint/runtime details for custom-like providers.
+        # Re-resolving generic "custom" can fall back to unrelated defaults.
+        api_key = current_api_key
+        base_url = current_base_url
     else:
         try:
             runtime = resolve_runtime_provider(requested=current_provider)

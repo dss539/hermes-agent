@@ -1007,17 +1007,41 @@ def detect_provider_for_model(
             break
 
     if direct_match:
-        # Check if we have credentials for this provider
+        # Check if we have credentials for this provider.
+        # OAuth-backed and external-process providers do not always expose
+        # plain API key env vars, so consult their runtime resolvers too.
         has_creds = False
         try:
-            from hermes_cli.auth import PROVIDER_REGISTRY
+            from hermes_cli.auth import (
+                PROVIDER_REGISTRY,
+                resolve_codex_runtime_credentials,
+                resolve_external_process_provider_credentials,
+                resolve_nous_runtime_credentials,
+            )
+
             pconfig = PROVIDER_REGISTRY.get(direct_match)
             if pconfig:
                 import os
+
                 for env_var in pconfig.api_key_env_vars:
                     if os.getenv(env_var, "").strip():
                         has_creds = True
                         break
+
+                if not has_creds and pconfig.auth_type == "oauth_external" and direct_match == "openai-codex":
+                    creds = resolve_codex_runtime_credentials()
+                    has_creds = bool(str(creds.get("api_key") or "").strip())
+
+                if not has_creds and pconfig.auth_type == "oauth_device_code" and direct_match == "nous":
+                    creds = resolve_nous_runtime_credentials()
+                    has_creds = bool(str(creds.get("api_key") or "").strip())
+
+                if not has_creds and pconfig.auth_type == "external_process":
+                    creds = resolve_external_process_provider_credentials(direct_match)
+                    has_creds = bool(
+                        str(creds.get("api_key") or "").strip()
+                        or str(creds.get("command") or "").strip()
+                    )
         except Exception:
             pass
 
