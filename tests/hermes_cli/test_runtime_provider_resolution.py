@@ -599,40 +599,6 @@ def test_named_custom_provider_falls_back_to_openai_api_key(monkeypatch):
     assert resolved["requested_provider"] == "custom:local-llm"
 
 
-def test_named_custom_provider_expands_env_var_api_key_reference(monkeypatch):
-    monkeypatch.setenv("OLLAMA_API_KEY", "ollama-secret-key")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setattr(
-        rp,
-        "load_config",
-        lambda: {
-            "custom_providers": [
-                {
-                    "name": "ollama-cloud",
-                    "base_url": "https://ollama.com/v1",
-                    "api_key": "OLLAMA_API_KEY",
-                }
-            ]
-        },
-    )
-    monkeypatch.setattr(
-        rp,
-        "resolve_provider",
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError(
-                "resolve_provider should not be called for named custom providers"
-            )
-        ),
-    )
-
-    resolved = rp.resolve_runtime_provider(requested="custom:ollama-cloud")
-
-    assert resolved["base_url"] == "https://ollama.com/v1"
-    assert resolved["api_key"] == "ollama-secret-key"
-    assert resolved["requested_provider"] == "custom:ollama-cloud"
-
-
 def test_named_custom_provider_does_not_shadow_builtin_provider(monkeypatch):
     monkeypatch.setattr(
         rp,

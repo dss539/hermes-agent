@@ -34,13 +34,6 @@ def _normalize_custom_provider_name(value: str) -> str:
     return value.strip().lower().replace(" ", "-")
 
 
-def _expand_env_style_secret(value: Any) -> str:
-    raw = str(value or "").strip()
-    if raw.isupper() and "_" in raw:
-        return os.getenv(raw, "").strip()
-    return raw
-
-
 def _detect_api_mode_for_url(base_url: str) -> Optional[str]:
     """Auto-detect api_mode from the resolved base URL.
 
@@ -153,7 +146,7 @@ def _resolve_runtime_from_pool_entry(
 ) -> Dict[str, Any]:
     model_cfg = model_cfg or _get_model_config()
     base_url = (getattr(entry, "runtime_base_url", None) or getattr(entry, "base_url", None) or "").rstrip("/")
-    api_key = _expand_env_style_secret(getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", ""))
+    api_key = str(getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")).strip()
     api_mode = "chat_completions"
     if provider == "openai-codex":
         api_mode = "codex_responses"
@@ -248,7 +241,7 @@ def _try_resolve_from_custom_pool(
         entry = pool.select()
         if entry is None:
             return None
-        pool_api_key = _expand_env_style_secret(getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", ""))
+        pool_api_key = str(getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")).strip()
         if not pool_api_key:
             return None
         return {
@@ -347,8 +340,6 @@ def _resolve_named_custom_runtime(
         return pool_result
 
     config_api_key = str(custom_provider.get("api_key", "") or "").strip()
-    if config_api_key.isupper() and "_" in config_api_key:
-        config_api_key = os.getenv(config_api_key, "").strip()
 
     is_ollama_url = "ollama.com" in base_url.lower()
     api_key_candidates = [
@@ -667,10 +658,10 @@ def resolve_runtime_provider(
         entry = pool.select()
         pool_api_key = ""
         if entry is not None:
-            pool_api_key = _expand_env_style_secret(
+            pool_api_key = str(
                 getattr(entry, "runtime_api_key", None)
                 or getattr(entry, "access_token", "")
-            )
+            ).strip()
         # For Nous, the pool entry's runtime_api_key is the agent_key — a
         # short-lived inference credential (~30 min TTL).  The pool doesn't
         # refresh it during selection (that would trigger network calls in
