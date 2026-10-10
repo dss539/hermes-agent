@@ -24,7 +24,7 @@ from gateway.kanban_watchers_common import (
     _to_thread_process_service,
     logger,
 )
-from gateway.kanban_watchers_notifier import _KanbanNotification, _notifier_collect
+from gateway.kanban_watchers_notifier import _KanbanNotification, _notifier_collect, destination_key
 from gateway.kanban_watchers_dispatcher import (
     _KanbanDispatcher,
     _log_spawn_results,
@@ -100,25 +100,51 @@ class GatewayKanbanWatchersMixin:
         # board, at startup (0 → first tick) and at most hourly.
         _gc_next_at = 0.0
 
-        while self._running:
-            try:
-                _gc_due = time.monotonic() >= _gc_next_at
-                _retention = 30
-                if _gc_due:
-                    _gc_next_at = time.monotonic() + _GC_INTERVAL_SECONDS
-                    _retention = _gc_retention_days()
+        # One delivery lane per destination chat: a wake runs the woken agent's whole turn, so a
+        # busy chat must not hold up other chats' notifications. A destination with a running lane
+        # is left unclaimed until the lane ends, so each chat still gets its events in order, one
+        # turn at a time.
+        lanes: dict[tuple, asyncio.Task] = {}
 
-                deliveries = await asyncio.to_thread(
-                    _notifier_collect, self, _kb,
-                    notifier_profile=notifier_profile, gc_due=_gc_due, gc_retention_days=_retention,
-                )
-                for d in deliveries:
+        async def _deliver_lane(group: list[dict]) -> None:
+            for d in group:
+                try:
                     await _KanbanNotification(
                         self, d, platform_cls=_Platform, sub_fail_counts=sub_fail_counts,
                     ).deliver()
-            except Exception as exc:
-                logger.warning("kanban notifier tick failed: %s", exc)
-            await self._sleep_between_ticks(interval)
+                except Exception as exc:
+                    logger.warning("kanban notifier delivery failed for %s: %s", d["sub"].get("task_id"), exc)
+
+        try:
+            while self._running:
+                try:
+                    _gc_due = time.monotonic() >= _gc_next_at
+                    _retention = 30
+                    if _gc_due:
+                        _gc_next_at = time.monotonic() + _GC_INTERVAL_SECONDS
+                        _retention = _gc_retention_days()
+
+                    for key in [key for key, task in lanes.items() if task.done()]:
+                        del lanes[key]
+                    deliveries = await asyncio.to_thread(
+                        _notifier_collect, self, _kb,
+                        notifier_profile=notifier_profile, gc_due=_gc_due, gc_retention_days=_retention,
+                        busy_destinations=set(lanes),
+                    )
+                    groups: dict[tuple, list[dict]] = {}
+                    for d in deliveries:
+                        groups.setdefault(destination_key(d["sub"]), []).append(d)
+                    for key, group in groups.items():
+                        lanes[key] = asyncio.create_task(_deliver_lane(group))
+                except Exception as exc:
+                    logger.warning("kanban notifier tick failed: %s", exc)
+                await self._sleep_between_ticks(interval)
+            # Normal stop finishes deliveries already in flight, as the sequential loop did.
+            if lanes:
+                await asyncio.gather(*lanes.values(), return_exceptions=True)
+        finally:
+            for task in lanes.values():
+                task.cancel()
 
     def _kanban_sub_op(self, board: Optional[str], op: str, sub: dict, **extra: Any) -> None:
         """Sync helper (runs in to_thread): call ``kanban_db_notify.<op>`` for one subscription on its board."""
