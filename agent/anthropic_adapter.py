@@ -780,10 +780,20 @@ def normalize_stream_usage(message_stream: Any) -> Any:
     return message_stream
 
 
+def _is_stream_unsupported_error(exc: Exception) -> bool:
+    """True only when the provider explicitly rejects streaming itself."""
+    return re.search(
+        r"(?<!\bnon-)(?<!\bnon )\bstream(?:ing|s)?\b[\"':]?\s+"
+        r"(?:(?:requests|responses|mode|output)\s+)?(?:(?:is|are)\s+)?"
+        r"(?:currently\s+)?not supported\b",
+        str(exc).lower(),
+    ) is not None
+
+
 def _is_stream_unavailable_error(exc: Exception) -> bool:
     """True when an Anthropic stream call should fall back to create()."""
     err_lower = str(exc).lower()
-    if "stream" in err_lower and "not supported" in err_lower:
+    if _is_stream_unsupported_error(exc):
         return True
     if "unexpected event order" in err_lower:
         return True
