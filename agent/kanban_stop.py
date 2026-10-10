@@ -41,7 +41,10 @@ def build_kanban_stop_nudge(
     # this worker from a successor that already owns the same card.
     if not raw_run_id:
         return None
-    run_id = int(raw_run_id)
+    try:
+        run_id = int(raw_run_id)
+    except ValueError:
+        return None
     from hermes_cli import kanban_db as kb, kanban_db_connect as kbc
 
     with kbc.connect_closing() as conn:
