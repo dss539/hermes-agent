@@ -2492,7 +2492,9 @@ def _rotate_worker_log(
 def _module_hermes_argv() -> list[str]:
     """Interpreter-bound Hermes CLI invocation (``hermes_cli.main`` is the
     console-script target — there is no top-level ``hermes`` package)."""
-    return [sys.executable, "-m", "hermes_cli.main"]
+    # Workers run in task-owned directories; never prepend them to sys.path.
+    # Unlike -I, -P retains user-site installs and unrelated PYTHONPATH libraries.
+    return [sys.executable, "-P", "-m", "hermes_cli.main"]
 
 
 def _propagate_module_import_root(cmd: list[str], env: dict[str, str]) -> None:
@@ -2508,7 +2510,7 @@ def _propagate_module_import_root(cmd: list[str], env: dict[str, str]) -> None:
     then owns dependency activation as usual. A resolved shim path owns its
     imports and is left alone. Same pin cron's external worker uses (#112729).
     """
-    if cmd[1:3] != ["-m", "hermes_cli.main"]:
+    if cmd[1:4] != ["-P", "-m", "hermes_cli.main"]:
         return
     from cron.scheduler_worker_env import pin_hermes_tree_on_pythonpath
 
@@ -2887,6 +2889,18 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
         env["HERMES_TENANT"] = task.tenant
     env["HERMES_KANBAN_TASK"] = task.id
     env["HERMES_KANBAN_WORKSPACE"] = workspace
+    # -P excludes implicit cwd; PYTHONPATH can explicitly put it back, including
+    # empty entries and symlink aliases. Keep unrelated user libraries.
+    if "PYTHONPATH" in env:
+        task_dir = os.path.normcase(os.path.realpath(workspace))
+        entries = [
+            entry for entry in env["PYTHONPATH"].split(os.pathsep)
+            if os.path.normcase(os.path.realpath(os.path.join(workspace, entry))) != task_dir
+        ]
+        if entries:
+            env["PYTHONPATH"] = os.pathsep.join(entries)
+        else:
+            env.pop("PYTHONPATH")
     # Tag the session `kanban` so session-browsing surfaces filter it out by
     # source instead of rendering one sidebar row per attempt.
     env["HERMES_SESSION_SOURCE"] = "kanban"
