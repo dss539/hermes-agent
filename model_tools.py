@@ -701,7 +701,8 @@ def _emit_post_tool_call_hook(
 
 
 def _dispatch_bridge_tool(function_name: str, function_args: dict[str, Any],
-                          enabled_toolsets: Optional[list[str]], disabled_toolsets: Optional[list[str]]):
+                          enabled_toolsets: Optional[list[str]], disabled_toolsets: Optional[list[str]],
+                          *, agent: Any = None):
     """Handle a Tool Search bridge call (tool_search / tool_describe / tool_call).
 
     None when *function_name* is not a bridge tool; ``(result, None)`` for a
@@ -719,6 +720,10 @@ def _dispatch_bridge_tool(function_name: str, function_args: dict[str, Any],
     try:
         current_defs = get_tool_definitions(enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets,
                                             quiet_mode=True, skip_tool_search_assembly=True) or []
+        if agent is not None:
+            from toolsets import agent_tool_drops
+            drops = agent_tool_drops(agent)
+            current_defs = [entry for entry in current_defs if (entry.get("function") or {}).get("name") not in drops]
     except Exception:
         current_defs = []
     args = function_args or {}
@@ -876,6 +881,7 @@ def handle_function_call(
     skip_pre_tool_call_hook: bool = False, skip_tool_request_middleware: bool = False,
     skip_tool_execution_middleware: bool = False, tool_request_middleware_trace: Optional[list[dict[str, Any]]] = None,
     enabled_toolsets: Optional[list[str]] = None, disabled_toolsets: Optional[list[str]] = None,
+    agent: Any = None,
 ) -> str:
     """Route a tool call through hooks/middleware to the registry; returns a JSON string.
 
@@ -883,7 +889,8 @@ def handle_function_call(
     enabled_tools picks execute_code's sandbox tools (default: the process-global
     ``_last_resolved_tool_names``). skip_pre_tool_call_hook: caller already fired
     it (single-fire contract). enabled/disabled_toolsets scope the Tool Search
-    bridge catalog to this session's grant (None = unrestricted).
+    bridge catalog to this session's grant (None = unrestricted); agent additionally
+    applies the calling agent's side-agent/platform drops to that catalog.
     """
     function_args = coerce_tool_args(function_name, function_args)
     if not isinstance(function_args, dict):
@@ -902,7 +909,7 @@ def handle_function_call(
     # Tool Search bridge: tool_search / tool_describe are catalog reads handled
     # inline; tool_call is unwrapped so every downstream hook (pre/post, edit
     # approval, guardrails) sees the real tool name, never the bridge.
-    bridged = _dispatch_bridge_tool(function_name, function_args, enabled_toolsets, disabled_toolsets)
+    bridged = _dispatch_bridge_tool(function_name, function_args, enabled_toolsets, disabled_toolsets, agent=agent)
     if bridged is not None:
         result, underlying = bridged
         if underlying is None:
@@ -918,7 +925,7 @@ def handle_function_call(
             *underlying, **asdict(ids), user_task=user_task, enabled_tools=enabled_tools,
             skip_pre_tool_call_hook=skip_pre_tool_call_hook, skip_tool_request_middleware=skip_tool_request_middleware,
             skip_tool_execution_middleware=skip_tool_execution_middleware, tool_request_middleware_trace=list(trace),
-            enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets,
+            enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets, agent=agent,
         )
 
     from tools.connectors import is_connector_name

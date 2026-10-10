@@ -381,6 +381,45 @@ def test_scope_lookup_fails_soft_when_session_drops_raise(deferred_tool, monkeyp
     assert callable_tool_names(agent) == BRIDGE
 
 
+@pytest.mark.parametrize("path", ["sequential", "concurrent"])
+def test_bridge_rejects_the_same_session_drops_as_direct_calls(deferred_tool, monkeypatch, path):
+    import toolsets
+    from agent.tool_executor import callable_tool_names, _resolve_sequential_dispatch, _ToolCallRef
+    from agent.agent_runtime_helpers import invoke_tool
+
+    name, toolset = deferred_tool
+    agent = _offered_agent([toolset], BRIDGE)
+    agent.side_agent = False
+    agent.session_id = "bridge-drop-probe"
+    agent._context_engine_tool_names = set()
+    agent._memory_manager = None
+    agent.quiet_mode = False
+    monkeypatch.setattr(toolsets, "agent_tool_drops", lambda a: frozenset({name}) if a.side_agent else frozenset())
+
+    def call(tool_name, args):
+        if path == "sequential":
+            dispatch = _resolve_sequential_dispatch(agent, _ToolCallRef(tool_name, args, "task", "call", []), [])
+            return json.loads(dispatch.execute(args))
+        return json.loads(invoke_tool(agent, tool_name, args, "task", "call",
+                                      pre_tool_block_checked=True, skip_tool_request_middleware=True,
+                                      skip_tool_execution_middleware=True))
+
+    args = {"name": name, "arguments": {"goal": "bridge"}}
+    assert name in callable_tool_names(agent)
+    assert call("tool_call", args) == {"ran": name, "goal": "bridge"}
+    agent.side_agent = True
+    assert name not in callable_tool_names(agent)
+    blocked = call("tool_call", args)
+    assert "not available in this session" in blocked.get("error", "")
+    assert "ran" not in blocked
+    # Reads use the same filtered catalog as invocation, not a misleading dropped schema.
+    described = call("tool_describe", {"names": [name]})
+    assert name not in described.get("tools", {})
+    assert name in described["not_found"]
+    searched = call("tool_search", {"queries": [name]})
+    assert name not in searched.get("tools", {})
+
+
 def test_describe_never_promotes_remote_connectors(deferred_tool):
     from agent.tool_executor import _load_described_tools
 
