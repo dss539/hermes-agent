@@ -82,6 +82,15 @@ def test_committed_handoff_survives_missing_transcript_and_successor(worker, mon
     assert _kanban_stop_nudge(SimpleNamespace(), []) is None
 
 
+def test_running_worker_nudge_names_the_terminal_handoffs(worker):
+    nudge = _kanban_stop_nudge(SimpleNamespace(), [])
+    assert nudge is not None
+    assert all(name in nudge for name in (
+        "kanban_complete", "kanban_block", "kanban_request_review",
+        "kanban_request_changes", "kanban_schedule",
+    ))
+
+
 @pytest.mark.parametrize("raw_run_id", ["abc", "12.5", "", "   "])
 def test_invalid_run_identity_is_treated_as_absent(worker, monkeypatch, raw_run_id):
     from agent.kanban_stop import build_kanban_stop_nudge
