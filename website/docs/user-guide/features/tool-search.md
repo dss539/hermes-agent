@@ -34,9 +34,20 @@ place of the deferred ones:
 
 ```
 tool_search(queries, limit?)   search the deferred-tool catalog (one or more queries)
-tool_describe(names)           load the full schemas for one or more tools
-tool_call(calls)               invoke deferred tools; `calls` is an array of {name, arguments}
+tool_describe(names)           load one or more tools: return their schemas and add them to the tool list
+tool_call(calls)               invoke deferred tools that are not loaded; `calls` is an array of {name, arguments}
 ```
+
+`tool_describe` **loads** the local tools it describes: from the model's next
+request they are ordinary entries in the tool list, called directly by name
+with the provider's own schema validation. They are appended at the tail of
+the tool list (existing bytes never move, so the cost is one prompt-cache
+prefill, as for a late-connecting MCP server), stay loaded across agent
+rebuilds and resume through the session's tool pin, and are dropped when a
+context compaction rebuilds the tool list. Remote `connectors__` tools are not
+loaded; they stay behind `tool_call`. A direct call to a deferred tool that has
+not been loaded is still accepted and gets the same scope and argument checks
+as `tool_call`.
 
 `calls` takes one entry per invocation; a single call is an array of one.
 Independent calls may be batched (up to 10 entries). The agent splits a
@@ -59,8 +70,7 @@ Model: tool_search(["create a github issue", "send a slack message"])
 Model: tool_describe(["mcp_github_create_issue", "mcp_slack_post_message"])
   → { tools: { mcp_github_create_issue: { parameters: { ... } },
                mcp_slack_post_message: { parameters: { ... } } } }
-Model: tool_call({ calls: [{ name: "mcp_github_create_issue",
-                             arguments: { title: "...", body: "..." } }] })
+Model: mcp_github_create_issue({ title: "...", body: "..." })   # loaded: called directly
   → { ok: true, issue_number: 42 }
 ```
 
@@ -234,16 +244,16 @@ to any progressive-disclosure design, not specific to this implementation:
   a deferred tool, it spends one or two extra model calls to find and
   load the schema. The token savings on the static side are real, but a
   portion is paid back at runtime.
-- **No cache benefit on deferred schemas.** A loaded `tool_describe`
-  result enters the conversation history (so it does get cached on
-  subsequent turns) but it never benefits from the system-prompt cache
-  prefix.
-- **No provider-native validation for deferred schemas.** `tool_describe`
-  lets the model read a deferred tool's schema, but the provider still sees
-  only the generic `tool_call.arguments` object. Hermes therefore coerces and
-  validates the underlying arguments locally before dispatch; the concrete
-  tool or MCP server remains responsible for schemas Hermes cannot safely
-  validate, such as malformed schemas or external references.
+- **One cache prefill per load.** Loading appends the tool to the tail of
+  the tool list, so the next request re-reads the conversation once;
+  existing bytes never move, and later requests hit the cache again.
+- **No provider-native validation through `tool_call`.** Loaded tools are
+  validated by the provider like any listed tool. Through `tool_call`
+  (unloaded tools, connectors) the provider sees only the generic
+  `tool_call.arguments` object, so Hermes coerces and validates the
+  underlying arguments locally before dispatch; the concrete tool or MCP
+  server remains responsible for schemas Hermes cannot safely validate,
+  such as malformed schemas or external references.
 - **Model-quality dependence.** Tool Search assumes the model can write a
   reasonable search query for the tool it wants. Smaller models do this
   less well; the published Anthropic numbers (49% → 74% on Opus 4 with

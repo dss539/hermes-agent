@@ -172,6 +172,33 @@ def persist_agent_tool_names(agent) -> None:
         logger.debug("tool_names persist skipped", exc_info=True)
 
 
+def promote_deferred_tools(agent, names) -> list:
+    """Offer Tool Search-deferred tools the model has loaded (``tool_describe``) as ordinary tools:
+    from the next request they are called by name, with provider-native schema validation, on every
+    provider. Only in-scope local deferred tools qualify (the ``tool_call`` universe; remote
+    connector schemas stay behind the bridge). Tail-append keeps every existing byte in place, so
+    the cost is one prompt-cache prefill, as for a late MCP server. The pin carries them across
+    rebuilds and resume; a compaction rebuild drops them. Returns the names added."""
+    from agent.tool_executor import _tool_search_scoped_names
+    from model_tools import get_tool_definitions
+    wanted = set(names) & _tool_search_scoped_names(agent)
+    if not wanted:
+        return []
+    raw = get_tool_definitions(enabled_toolsets=getattr(agent, "enabled_toolsets", None),
+                               disabled_toolsets=getattr(agent, "disabled_toolsets", None),
+                               quiet_mode=True, skip_tool_search_assembly=True) or []
+    with _agent_tools_lock:
+        current = _agent_tool_defs(agent)
+        present = {_def_name(t) for t in current}
+        added = [t for t in raw if _def_name(t) in wanted and _def_name(t) not in present]
+        if not added:
+            return []
+        agent.tools = current + added
+        agent.valid_tool_names = {*(getattr(agent, "valid_tool_names", None) or ()), *map(_def_name, added)}
+    persist_agent_tool_names(agent)
+    return [_def_name(t) for t in added]
+
+
 def _config_permitted_names(agent) -> set:
     """Tool names this agent's toolset selection allows before ``check_fn``: all a pin may carry
     forward. A client-surface toolset counts as allowed (only its client can add it, so its absence

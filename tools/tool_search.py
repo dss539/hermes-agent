@@ -244,8 +244,8 @@ def _search_description(deferred_count: int, listing: Optional[str], listing_for
         "query return nothing. Returns "
         "matching tool names grouped per query plus a shared map with each "
         "tool's description. Follow with "
-        f"`{TOOL_DESCRIBE_NAME}` to load full parameter schemas, "
-        f"then `{TOOL_CALL_NAME}` to invoke. Tools listed at the top of this "
+        f"`{TOOL_DESCRIBE_NAME}`, which loads the local tools you name: from your next step "
+        "they are in your tool list and you call them directly by name. Tools listed at the top of this "
         "system prompt are already available and do not need to be searched."
         + (_CONNECTIONS_HINT if connections_granted else ""))
     if not listing:
@@ -294,9 +294,10 @@ def bridge_tool_schemas(deferred_count: int, listing: Optional[str] = None,
         ),
         _bridge_schema(
             TOOL_DESCRIBE_NAME,
-            f"Load the full JSON schemas for tools returned by `{TOOL_SEARCH_NAME}`. "
-            f"Required before `{TOOL_CALL_NAME}` if a tool's parameters are unknown. "
-            "Batch every schema you need into one call.",
+            f"Load local tools returned by `{TOOL_SEARCH_NAME}`: returns their full JSON schemas and "
+            "adds them to your tool list, so from your next step you call them directly by name. "
+            "Remote connectors__ tools return schemas but stay behind tool_call. "
+            "Batch every tool you need into one call.",
             {
                 "names": {
                     "type": "array",
@@ -308,7 +309,8 @@ def bridge_tool_schemas(deferred_count: int, listing: Optional[str] = None,
         ),
         _bridge_schema(
             TOOL_CALL_NAME,
-            "Invoke deferred tools. Takes `calls`, an array of {name, arguments} "
+            "Invoke deferred tools that are not loaded (loaded tools are called directly "
+            "by name; connectors__ tools always go through here). Takes `calls`, an array of {name, arguments} "
             "— one entry per invocation; a single call is an array of one. "
             "Independent calls may be batched together. Local entries are split "
             "into individual tool calls by the agent and follow each tool's "

@@ -365,7 +365,10 @@ def _tool_search_scoped_names(agent) -> frozenset:
 
     enabled = getattr(agent, "enabled_toolsets", None)
     disabled = getattr(agent, "disabled_toolsets", None)
+    from toolsets import agent_tool_drops
+    drops = agent_tool_drops(agent)
     cache_key = (
+        drops,
         _registry.current_scope_key(),
         getattr(_registry, "_generation", 0),
         frozenset(enabled) if enabled is not None else None,
@@ -377,12 +380,27 @@ def _tool_search_scoped_names(agent) -> frozenset:
     try:
         names = _ts.scoped_deferrable_names(model_tools.get_tool_definitions(
             enabled_toolsets=enabled, disabled_toolsets=disabled, quiet_mode=True, skip_tool_search_assembly=True,
-        ) or [])
+        ) or []) - drops
     except Exception:
         names = frozenset()
     with contextlib.suppress(Exception):
         agent._tool_search_scope_cache = (cache_key, names)
     return names
+
+
+def callable_tool_names(agent) -> frozenset:
+    """Names a model may call directly: the offered tools plus, while the ``tool_call`` bridge
+    is offered, the session-scoped deferred tools it could reach through that bridge. A direct
+    call to a deferred tool gets exactly the bridge's authority and argument checks
+    (``_unwrap_tool_search_call``), instead of being fuzzy-repaired to a different tool."""
+    offered = frozenset(getattr(agent, "valid_tool_names", None) or ())
+    try:
+        from tools import tool_search as _ts
+    except Exception:
+        return offered
+    if _ts.TOOL_CALL_NAME not in offered:
+        return offered
+    return offered | _tool_search_scoped_names(agent)
 
 
 def _canonical_tool_name(function_name: str) -> str:
@@ -409,8 +427,13 @@ def _unwrap_tool_search_call(
     try:
         from tools import tool_search as _ts
         if function_name != _ts.TOOL_CALL_NAME:
-            return function_name, function_args, None
-        underlying, underlying_args, err = _ts.resolve_underlying_call(function_args)
+            if (function_name in (getattr(agent, "valid_tool_names", None) or ())
+                    or function_name not in callable_tool_names(agent)):
+                return function_name, function_args, None
+            # A direct call to a deferred tool: same checks as tool_call(name=function_name).
+            underlying, underlying_args, err = function_name, function_args, None
+        else:
+            underlying, underlying_args, err = _ts.resolve_underlying_call(function_args)
         if err or not underlying:
             return function_name, function_args, None
         if underlying == _ts.CONNECTOR_BATCH_SENTINEL:
@@ -1154,6 +1177,9 @@ def _commit_tool_result(
     if not _flush_session_db_after_tool_progress(agent, messages, stage=f"tool result {function_name}"):
         return None
 
+    if function_name == "tool_describe" and not (is_error or blocked):
+        _load_described_tools(agent, function_result)
+
     if not blocked:
         # ``tool.completed`` projects AFTER the canonical append + flush so resume can
         # reconstruct the result even if the UI bridge dies mid-projection.
@@ -1164,6 +1190,21 @@ def _commit_tool_result(
     if isinstance(function_result, str) and len(function_result) >= _LARGE_TOOL_RESULT_TRIM_CHARS:
         agent._trim_after_tool_batch = True
     return persisted_result, function_result, tool_message.get("_tool_output_risk")
+
+
+def _load_described_tools(agent, function_result) -> None:
+    """``tool_describe`` loads tools: the described deferred tools join ``agent.tools``, so the
+    model calls them directly from its next request (fail-soft: ``tool_call`` still reaches them)."""
+    try:
+        # raw_decode: a guardrail notice may be appended after the JSON payload.
+        described = json.JSONDecoder().raw_decode(function_result)[0].get("tools") or {}
+        from tools.mcp_tool_agent import promote_deferred_tools
+        added = promote_deferred_tools(agent, described)
+    except Exception:
+        logger.debug("loading described tools skipped", exc_info=True)
+        return
+    if added:
+        logger.info("tool_describe loaded deferred tools as direct tools: %s", added)
 
 
 def _persist_multimodal_text_parts(result: dict, tool_name: str, tool_call_id: str, env, budget: BudgetConfig) -> dict:

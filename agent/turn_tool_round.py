@@ -100,8 +100,10 @@ def run_tool_round(
 
     # Mixed batch: the assistant message keeps EVERY emitted call (each tool_call needs a
     # matching result) while only valid ones dispatch.
+    from agent.tool_executor import callable_tool_names
+    _callable = callable_tool_names(agent)
     _invalid_batch_calls = [
-        tc for tc in assistant_message.tool_calls if tc.function.name not in agent.valid_tool_names
+        tc for tc in assistant_message.tool_calls if tc.function.name not in _callable
     ] if _tvv.mixed_invalid_batch else []
 
     assistant_msg, duplicate_previous_interim = stage_tool_call_message(
@@ -121,7 +123,7 @@ def run_tool_round(
                 ),
             })
         assistant_message.tool_calls = [
-            tc for tc in assistant_message.tool_calls if tc.function.name in agent.valid_tool_names
+            tc for tc in assistant_message.tool_calls if tc.function.name in _callable
         ]
 
     # Persist the tool-call turn before any tool side effects so resume sees the executed
