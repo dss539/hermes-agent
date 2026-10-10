@@ -336,8 +336,13 @@ def decompose_task(
     return _apply_fanout(task_id, parsed, routing, audit_author)
 
 
-def list_triage_ids(*, tenant: Optional[str] = None) -> list[str]:
-    """Return task ids currently in the triage column."""
+def list_triage_ids(*, tenant: Optional[str] = None, automatic: bool = False) -> list[str]:
+    """List triage cards; automatic intake must preserve block-loop escalations.
+
+    Those cards need a changed prerequisite or explicit supervisor disposition,
+    not another rewrite of their spec. Manual CLI decomposition stays available.
+    """
     with kbc.connect_closing() as conn:
         rows = kb.list_tasks(conn, status="triage", tenant=tenant, limit=1000)
-    return [row.id for row in rows]
+    return [row.id for row in rows
+            if not automatic or row.block_recurrences < kb.BLOCK_RECURRENCE_LIMIT]

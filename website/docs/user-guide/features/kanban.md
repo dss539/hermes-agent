@@ -423,7 +423,10 @@ what put it there. A subsequent *re-block for the same reason* did: after a task
 is blocked → unblocked → re-blocked for the same cause `BLOCK_RECURRENCE_LIMIT`
 times (default `2`), the unblock-loop breaker stops sending it back to `blocked`
 — where a cron would just keep unblocking it — and routes it to `triage` for
-orchestration attention. This is a deterministic DB guard, not an LLM judgment call, and
+orchestration attention. Automatic decomposition skips these escalated cards; it
+must not rewrite their specs and silently re-admit the unchanged blocker. Explicit
+`hermes kanban decompose <id>` remains available after supervisor disposition.
+This is a deterministic DB guard, not an LLM judgment call, and
 a task's body text cannot opt out of it: the recurrence counter deliberately
 survives each unblock (it resets only on a successful `complete`). To keep an
 unblocked task in the work pool, resolve *why it keeps re-blocking* (unfinished
@@ -568,6 +571,12 @@ Every profile that works kanban tasks automatically gets the worker lifecycle �
 4. Complete with `kanban_complete(summary="...", metadata={...})`, hand a code change off for same-card review with `kanban_request_review(summary="...")`, or `kanban_block(reason="...")` if stuck.
 
 Normal tool activity also extends the claim automatically (the worker mirrors its in-process liveness onto the board about once a minute). That bridge only works for a process the dispatcher spawned itself: a process that carries `HERMES_DELEGATED_CHILD_CONTEXT` next to `HERMES_KANBAN_TASK` (a `delegate_task` descendant, or a hand-launched copy of a worker's environment) is fenced from the board — its auto-heartbeat logs one `kanban auto-heartbeat for task … refused` warning and `kanban_complete` / `kanban_request_review` refuse. Fix the launch (let the dispatcher spawn the worker) rather than exporting the marker away.
+
+Before a plain-text stop, an active dispatcher-owned run gets at most two
+continuation notices to commit its handoff. This check uses the board's run
+record, not merely the presence of a tool call in the transcript: a rejected
+call does not count, and a finished or superseded run is not asked to close a
+successor's card.
 
 That final terminal board call (`kanban_complete` / `kanban_request_review` /
 `kanban_block`; reviewers end with `kanban_complete` or `kanban_request_changes`)
@@ -802,6 +811,10 @@ Visually the target is the familiar Linear / Fusion layout: dark theme, column h
 The kanban board has two ways to handle a task you drop into the Triage column:
 
 **Auto (default)** — `kanban.auto_decompose: true`. The gateway-embedded dispatcher runs the **decomposer** on each tick, capped by `kanban.auto_decompose_per_tick` (default 3 tasks per tick) so a bulk-load of triage tasks doesn't burst-spend the auxiliary LLM. The decomposer uses the built-in decomposition prompt plus the `auxiliary.kanban_decomposer` model path, reads your installed profiles + their descriptions, and asks the LLM to produce a JSON task graph: which tasks to spawn, who they go to, and which depend on which. The original triage task becomes the parent of every leaf in the graph, so it stays alive until the whole graph completes - and then promotes back to `ready` so its assignee (`kanban.orchestrator_profile`, else the assignee the task already had, else the active default profile) can judge completion and add more tasks if the work isn't done. This is the "drop a one-liner, walk away" flow.
+
+Cards escalated by the repeated-block breaker are not automatic intake, even
+though they occupy Triage. They remain available for explicit supervisor recovery;
+normal new triage cards continue to decompose automatically.
 
 A completed built-in fan-out is recorded atomically with its child graph. Moving
 that root back to Triage does not create another graph; ordinary prerequisite
