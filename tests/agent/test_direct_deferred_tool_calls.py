@@ -365,6 +365,22 @@ def test_promotion_cannot_republish_tools_removed_after_capture(deferred_tool, m
         assert added == []
 
 
+def test_scope_lookup_fails_soft_when_session_drops_raise(deferred_tool, monkeypatch):
+    from agent.tool_executor import callable_tool_names, _tool_search_scoped_names
+    import toolsets
+
+    name, toolset = deferred_tool
+    agent = _offered_agent([toolset], BRIDGE)
+    assert name in callable_tool_names(agent)  # prime a previously permitted cache
+
+    def failed_drops(a):
+        raise RuntimeError("session drop lookup failed")
+
+    monkeypatch.setattr(toolsets, "agent_tool_drops", failed_drops)
+    assert _tool_search_scoped_names(agent) == frozenset()
+    assert callable_tool_names(agent) == BRIDGE
+
+
 def test_describe_never_promotes_remote_connectors(deferred_tool):
     from agent.tool_executor import _load_described_tools
 

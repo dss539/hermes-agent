@@ -360,29 +360,26 @@ def _tool_search_scoped_names(agent) -> frozenset:
         import model_tools
         from tools import tool_search as _ts
         from tools.registry import registry as _registry
-    except Exception:
-        return frozenset()
+        from toolsets import agent_tool_drops
 
-    enabled = getattr(agent, "enabled_toolsets", None)
-    disabled = getattr(agent, "disabled_toolsets", None)
-    from toolsets import agent_tool_drops
-    drops = agent_tool_drops(agent)
-    cache_key = (
-        drops,
-        _registry.current_scope_key(),
-        getattr(_registry, "_generation", 0),
-        frozenset(enabled) if enabled is not None else None,
-        frozenset(disabled) if disabled is not None else None,
-    )
-    cached = getattr(agent, "_tool_search_scope_cache", None)
-    if cached is not None and cached[0] == cache_key:
-        return cached[1]
-    try:
+        enabled = getattr(agent, "enabled_toolsets", None)
+        disabled = getattr(agent, "disabled_toolsets", None)
+        drops = agent_tool_drops(agent)
+        cache_key = (
+            drops,
+            _registry.current_scope_key(),
+            getattr(_registry, "_generation", 0),
+            frozenset(enabled) if enabled is not None else None,
+            frozenset(disabled) if disabled is not None else None,
+        )
+        cached = getattr(agent, "_tool_search_scope_cache", None)
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
         names = _ts.scoped_deferrable_names(model_tools.get_tool_definitions(
             enabled_toolsets=enabled, disabled_toolsets=disabled, quiet_mode=True, skip_tool_search_assembly=True,
         ) or []) - drops
     except Exception:
-        names = frozenset()
+        return frozenset()
     with contextlib.suppress(Exception):
         agent._tool_search_scope_cache = (cache_key, names)
     return names
