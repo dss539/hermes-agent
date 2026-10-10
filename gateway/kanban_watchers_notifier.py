@@ -226,12 +226,14 @@ def _adapter_for_subscription(runner: Any, platform: Any, sub: dict, owner_profi
 class _Collector:
     """One tick's claim state: which profiles/platforms this gateway serves and the GC gate."""
 
-    def __init__(self, runner: Any, kb: Any, *, notifier_profile: Optional[str], gc_due: bool, gc_retention_days: int) -> None:
+    def __init__(self, runner: Any, kb: Any, *, notifier_profile: Optional[str], gc_due: bool, gc_retention_days: int,
+                 busy_destinations: Optional[set] = None) -> None:
         self.runner = runner
         self.kb = kb
         self.notifier_profile = notifier_profile
         self.gc_due = gc_due
         self.gc_retention_days = gc_retention_days
+        self.busy_destinations = busy_destinations or set()
         self.deliveries: list[dict] = []
         self.include_unowned = runner._owns_kanban_dispatcher_lock()
         self.profile_adapters = getattr(runner, "_profile_adapters", {})
@@ -301,6 +303,11 @@ class _Collector:
 
     def _claim_for_sub(self, conn: Any, slug: str, sub: dict) -> Optional[dict]:
         """Claim one subscription's unseen events; None when skipped or nothing new."""
+        if destination_key(sub) in self.busy_destinations:
+            # Left unclaimed: the destination's running lane keeps its events in order.
+            logger.debug("kanban notifier: %s waits for the running delivery to %s/%s",
+                         sub.get("task_id"), sub.get("platform"), sub.get("chat_id"))
+            return None
         owner_profile = sub.get("notifier_profile") or None
         platform = (sub.get("platform") or "").lower()
         if platform not in self.active_platforms:
@@ -354,15 +361,23 @@ class _Collector:
             conn.close()
 
 
-def _notifier_collect(runner: Any, kb: Any, *, notifier_profile: Optional[str], gc_due: bool, gc_retention_days: int) -> list[dict]:
+def destination_key(sub: dict) -> tuple:
+    """The chat a subscription delivers to; the notifier runs one delivery lane per destination."""
+    return ((sub.get("platform") or "").lower(), sub.get("chat_id"), sub.get("thread_id") or "")
+
+
+def _notifier_collect(runner: Any, kb: Any, *, notifier_profile: Optional[str], gc_due: bool, gc_retention_days: int,
+                      busy_destinations: Optional[set] = None) -> list[dict]:
     """Claim unseen terminal events for every owned subscription on every board.
 
     Each gateway polls only subscriptions owned by profiles whose adapters it
     hosts; legacy rows without a profile stamp are visible only to the process
-    holding the singleton dispatcher lock.
+    holding the singleton dispatcher lock. Subscriptions whose destination is in
+    ``busy_destinations`` are left unclaimed until that destination's lane finishes.
     """
     return _Collector(
         runner, kb, notifier_profile=notifier_profile, gc_due=gc_due, gc_retention_days=gc_retention_days,
+        busy_destinations=busy_destinations,
     ).collect()
 
 
