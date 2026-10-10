@@ -339,3 +339,42 @@ def test_fetch_portal_account_returns_value_and_keeps_caller_context(monkeypatch
     finally:
         marker.reset(token)
     assert seen == {"force_fresh": True, "marker": "profile-scope"}
+
+
+def test_fetch_account_usage_anthropic_utilization_is_percentage_points(monkeypatch):
+    """Anthropic /api/oauth/usage returns percentage points (1.0 = 1%), not fractions."""
+    monkeypatch.setattr(
+        "agent.account_usage.resolve_anthropic_token",
+        lambda **kw: "cc-test-token",
+    )
+    monkeypatch.setattr(
+        "agent.account_usage._is_oauth_token",
+        lambda key: True,
+    )
+    monkeypatch.setattr(
+        "agent.account_usage._get_json",
+        lambda url, headers, timeout=15.0: {
+            "five_hour": {"utilization": 11.0, "resets_at": 1_900_000_000},
+            "seven_day": {"utilization": 1.0, "resets_at": 1_900_500_000},
+            "seven_day_opus": {"utilization": 30.0, "resets_at": 1_900_500_000},
+            "seven_day_sonnet": {"utilization": 60.0, "resets_at": 1_900_500_000},
+            "extra_usage": {
+                "is_enabled": True,
+                "used_credits": 250.0,
+                "monthly_limit": 1000.0,
+                "currency": "USD",
+            },
+        },
+    )
+
+    snapshot = fetch_account_usage("anthropic")
+
+    assert snapshot is not None
+    assert snapshot.provider == "anthropic"
+    assert [(window.label, window.used_percent) for window in snapshot.windows] == [
+        ("Current session", 11.0),
+        ("Current week", 1.0),
+        ("Opus week", 30.0),
+        ("Sonnet week", 60.0),
+    ]
+    assert "Extra usage: 250.00 / 1000.00 USD" in snapshot.details
