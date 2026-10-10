@@ -82,6 +82,17 @@ def test_committed_handoff_survives_missing_transcript_and_successor(worker, mon
     assert _kanban_stop_nudge(SimpleNamespace(), []) is None
 
 
+@pytest.mark.parametrize("raw_run_id", ["abc", "12.5", "", "   "])
+def test_invalid_run_identity_is_treated_as_absent(worker, monkeypatch, raw_run_id):
+    from agent.kanban_stop import build_kanban_stop_nudge
+
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", raw_run_id)
+    # Call the builder itself: the outer stop gate must not hide a parsing exception.
+    assert build_kanban_stop_nudge() is None
+    with kbc.connect_closing() as conn:
+        assert kb.goal_run_status(conn, *worker) == "running"
+
+
 def test_conversation_recovers_rejected_handoff_then_commits(worker):
     """Real agent loop and Kanban handlers; only model responses are scripted."""
     from unittest.mock import MagicMock, patch
