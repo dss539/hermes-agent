@@ -54,9 +54,10 @@ def _tool_defs_content_changed(agent, new_defs: list) -> bool:
         return False
 
 
-def _drop_session_tools(agent, new_defs: list, new_names: set) -> tuple:
-    from toolsets import agent_tool_drops
-    drops = agent_tool_drops(agent)
+def _drop_session_tools(agent, new_defs: list, new_names: set, *, drops=None) -> tuple:
+    if drops is None:
+        from toolsets import agent_tool_drops
+        drops = agent_tool_drops(agent)
     if not drops:
         return new_defs, new_names
     return [entry for entry in new_defs if _def_name(entry) not in drops], new_names - drops
@@ -181,20 +182,38 @@ def promote_deferred_tools(agent, names) -> list:
     rebuilds and resume; a compaction rebuild drops them. Returns the names added."""
     from agent.tool_executor import _tool_search_scoped_names
     from model_tools import get_tool_definitions
+    from tools.registry import registry
+    from toolsets import agent_tool_drops
+    # Capture before reading scope/definitions, outside the tools lock (no registry lock nesting).
+    snapshot_generation = registry._generation
+    session_state = (getattr(agent, "platform", None), getattr(agent, "side_agent", False))
     wanted = set(names) & _tool_search_scoped_names(agent)
     if not wanted:
         return []
     raw = get_tool_definitions(enabled_toolsets=getattr(agent, "enabled_toolsets", None),
                                disabled_toolsets=getattr(agent, "disabled_toolsets", None),
                                quiet_mode=True, skip_tool_search_assembly=True) or []
+    # Platform drops resolve toolsets through the registry. Compute them before taking
+    # the tools lock, then reject publication if the session's drop identity changed.
+    drops = agent_tool_drops(agent)
     with _agent_tools_lock:
+        published_gen = getattr(agent, "_tool_snapshot_generation", -1)
+        published_gen = published_gen if isinstance(published_gen, int) else -1
+        if (snapshot_generation < published_gen
+                or session_state != (getattr(agent, "platform", None), getattr(agent, "side_agent", False))):
+            return []  # a newer refresh or session restriction won
+        raw, wanted = _drop_session_tools(agent, raw, wanted, drops=drops)
+        agent._tool_snapshot_generation = max(published_gen, snapshot_generation)
         current = _agent_tool_defs(agent)
         present = {_def_name(t) for t in current}
         added = [t for t in raw if _def_name(t) in wanted and _def_name(t) not in present]
         if not added:
             return []
-        agent.tools = current + added
-        agent.valid_tool_names = {*(getattr(agent, "valid_tool_names", None) or ()), *map(_def_name, added)}
+        agent.tools, agent.valid_tool_names = _drop_session_tools(
+            agent, current + added,
+            {*(getattr(agent, "valid_tool_names", None) or ()), *map(_def_name, added)},
+            drops=drops,
+        )
     persist_agent_tool_names(agent)
     return [_def_name(t) for t in added]
 

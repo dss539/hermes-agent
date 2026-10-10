@@ -287,6 +287,84 @@ def test_loaded_tool_survives_prefix_refresh_but_drops_on_compaction(deferred_to
     assert all(t["function"]["name"] != name for t in agent.tools)
 
 
+def test_promotion_resolves_registry_backed_drops_outside_the_tools_lock(deferred_tool, monkeypatch):
+    import toolsets
+    from tools import mcp_tool_agent
+
+    name, toolset = deferred_tool
+    agent = _offered_agent([toolset], BRIDGE)
+    original = toolsets.agent_tool_drops
+
+    def checked_drops(a):
+        # The real helper may take registry._lock while resolving platform toolsets.
+        assert not mcp_tool_agent._agent_tools_lock.locked()
+        return original(a)
+
+    monkeypatch.setattr(toolsets, "agent_tool_drops", checked_drops)
+    assert mcp_tool_agent.promote_deferred_tools(agent, [name]) == [name]
+    assert name in agent.valid_tool_names
+
+
+@pytest.mark.parametrize("change", ["deregister", "session_drop"])
+def test_promotion_cannot_republish_tools_removed_after_capture(deferred_tool, monkeypatch, tmp_path, change):
+    """Pause after reading definitions, then complete a reload or change session drops."""
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import model_tools
+    import toolsets
+    from agent.tool_executor import callable_tool_names
+    from hermes_state import SessionDB
+    from tools import mcp_tool_agent
+    from tools.registry import registry
+
+    name, toolset = deferred_tool
+    agent = _offered_agent([toolset], BRIDGE)
+    agent.side_agent = False
+    monkeypatch.setattr(toolsets, "agent_tool_drops", lambda a: frozenset({name}) if a.side_agent else frozenset())
+    # Warm the scope cache so the paused read is promotion's raw definition capture.
+    assert name in callable_tool_names(agent)
+    captured, resume = threading.Event(), threading.Event()
+    promotion_thread = None
+    original = model_tools.get_tool_definitions
+
+    def paused_defs(**kwargs):
+        result = original(**kwargs)
+        if threading.get_ident() == promotion_thread and kwargs.get("skip_tool_search_assembly"):
+            captured.set()
+            assert resume.wait(10), "promotion was not resumed"
+        return result
+
+    monkeypatch.setattr(model_tools, "get_tool_definitions", paused_defs)
+    monkeypatch.setattr(mcp_tool_agent, "tool_pin_version", lambda: "test-repair")
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        agent._session_db, agent.session_id = db, "promotion-race"
+        db.create_session(agent.session_id, source="test")
+        mcp_tool_agent.persist_agent_tool_names(agent)
+
+        def promote():
+            nonlocal promotion_thread
+            promotion_thread = threading.get_ident()
+            return mcp_tool_agent.promote_deferred_tools(agent, [name])
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(promote)
+            try:
+                assert captured.wait(10), "promotion did not capture definitions"
+                if change == "deregister":
+                    registry.deregister(name)
+                    mcp_tool_agent.refresh_agent_mcp_tools(agent, preserve_prefix=True)
+                else:
+                    agent.side_agent = True
+            finally:
+                resume.set()
+            added = future.result(timeout=10)
+        pin = json.loads(db.get_session(agent.session_id)["tool_names"])
+        assert name not in {t["function"]["name"] for t in agent.tools}
+        assert name not in agent.valid_tool_names
+        assert name not in {t["function"]["name"] for t in pin["tools"]}
+        assert added == []
+
+
 def test_describe_never_promotes_remote_connectors(deferred_tool):
     from agent.tool_executor import _load_described_tools
 
