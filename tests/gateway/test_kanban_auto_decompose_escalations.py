@@ -54,3 +54,31 @@ def test_auto_decompose_preserves_escalations_and_processes_new_work(tmp_path, m
     assert decomp.decompose_task(escalated, author="supervisor").ok
     with kbc.connect_closing() as conn:
         assert kb.get_task(conn, escalated).status == "ready"
+
+
+def test_escalated_page_cannot_hide_fresh_intake(tmp_path, monkeypatch):
+    home = tmp_path / "isolated-state"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_KANBAN_DB", str(home / "kanban.db"))
+    monkeypatch.setenv("HERMES_KANBAN_BOARD", "default")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    kb.init_db()
+    with kbc.connect_closing() as conn:
+        # Bulk fixture: a whole higher-priority page of already-escalated cards.
+        # The small lifecycle test above establishes how these states are reached.
+        conn.executemany(
+            "INSERT INTO tasks (id, title, status, priority, created_at, "
+            "workspace_kind, block_recurrences, tenant) VALUES (?, ?, 'triage', 10, 1, 'scratch', ?, 'one')",
+            [(f"t_escalated_{i}", "Unresolved prerequisite", kb.BLOCK_RECURRENCE_LIMIT) for i in range(1000)],
+        )
+        conn.commit()
+        fresh = kb.create_task(conn, title="New work", tenant="one", triage=True)
+        other = kb.create_task(conn, title="Other tenant", tenant="two", priority=20, triage=True)
+    assert decomp.list_triage_ids(automatic=True, tenant="one") == [fresh]
+    assert decomp.list_triage_ids(automatic=True) == [other, fresh]
+    assert decomp.list_triage_ids(automatic=True, tenant="absent") == []
+    manual = decomp.list_triage_ids(tenant="one")
+    assert len(manual) == 1000
+    assert fresh not in manual  # preserve the existing unfiltered manual window
+    assert set(manual) == {f"t_escalated_{i}" for i in range(1000)}

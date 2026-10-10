@@ -342,7 +342,15 @@ def list_triage_ids(*, tenant: Optional[str] = None, automatic: bool = False) ->
     Those cards need a changed prerequisite or explicit supervisor disposition,
     not another rewrite of their spec. Manual CLI decomposition stays available.
     """
+    query = "SELECT id FROM tasks WHERE status = 'triage'"
+    params: list = []
+    if tenant is not None:
+        query += " AND tenant = ?"
+        params.append(tenant)
+    if automatic:
+        # Filter before LIMIT: parked escalations must not fill the intake page.
+        query += " AND block_recurrences < ?"
+        params.append(kb.BLOCK_RECURRENCE_LIMIT)
+    query += f" ORDER BY {kb.VALID_SORT_ORDERS['priority']} LIMIT 1000"
     with kbc.connect_closing() as conn:
-        rows = kb.list_tasks(conn, status="triage", tenant=tenant, limit=1000)
-    return [row.id for row in rows
-            if not automatic or row.block_recurrences < kb.BLOCK_RECURRENCE_LIMIT]
+        return [row["id"] for row in conn.execute(query, params)]

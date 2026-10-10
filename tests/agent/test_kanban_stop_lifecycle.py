@@ -117,4 +117,3 @@ def test_conversation_recovers_rejected_handoff_then_commits(worker):
     with kbc.connect_closing() as conn:
         assert kb.get_task(conn, worker[0]).status == "done"
         assert kb.goal_run_status(conn, *worker) == "done"
-
