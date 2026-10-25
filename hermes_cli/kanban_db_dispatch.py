@@ -2697,7 +2697,7 @@ def _retag_legacy_worker_sessions(workspaces_root_path: str) -> None:
 def _worker_argv(task: Task, profile_arg: str, hermes_home: Optional[str]) -> list[str]:
     """The profile owner executes; this subprocess only waits for its receipt."""
     import sys
-    return [sys.executable, "-m", "hermes_cli.kanban_worker_client"]
+    return [sys.executable, "-P", "-m", "hermes_cli.kanban_worker_client"]
 
 
 def _open_worker_log(task: Task, board: Optional[str]):
@@ -2810,6 +2810,18 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
         env["HERMES_TENANT"] = task.tenant
     env["HERMES_KANBAN_TASK"] = task.id
     env["HERMES_KANBAN_WORKSPACE"] = workspace
+    # -P excludes implicit cwd; PYTHONPATH can explicitly put it back, including
+    # empty entries and symlink aliases. Keep unrelated user libraries.
+    if "PYTHONPATH" in env:
+        task_dir = os.path.normcase(os.path.realpath(workspace))
+        entries = [
+            entry for entry in env["PYTHONPATH"].split(os.pathsep)
+            if os.path.normcase(os.path.realpath(os.path.join(workspace, entry))) != task_dir
+        ]
+        if entries:
+            env["PYTHONPATH"] = os.pathsep.join(entries)
+        else:
+            env.pop("PYTHONPATH")
     # Tag the session `kanban` so session-browsing surfaces filter it out by
     # source instead of rendering one sidebar row per attempt.
     env["HERMES_SESSION_SOURCE"] = "kanban"
