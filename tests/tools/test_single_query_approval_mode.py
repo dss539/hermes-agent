@@ -15,14 +15,17 @@ that decision deterministic and explicit.
 import pytest
 
 import tools.approval as approval_module
-from tools import approval_context
+from tools import approval_context, approval_smart
 from gateway.session_context import clear_session_vars, reset_session_vars, set_session_vars
 from tools.approval import check_all_command_guards, check_dangerous_command
 from tools.approval_context import _get_single_query_approval_mode
 
 
 @pytest.fixture(autouse=True)
-def _clear_approval_state():
+def _clear_approval_state(monkeypatch):
+    # Smart mode is the config default here. The guardian is unsure (as when its call fails),
+    # so each unattended context's own deny/approve mode decides.
+    monkeypatch.setattr(approval_smart, "_smart_approve", lambda *_: "escalate")
     approval_module._permanent_approved.clear()
     approval_module.clear_session("default")
     approval_module.clear_session("test-session")

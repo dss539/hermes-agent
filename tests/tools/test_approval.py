@@ -928,6 +928,8 @@ class TestWebhookApprovalExclusion:
 
         monkeypatch.setattr(approval_mod, "_YOLO_MODE_FROZEN", False)
         monkeypatch.setattr(approval_context, "_get_approval_mode", lambda: "smart")
+        # The guardian is unsure (as when its call fails), so the unattended deny still applies.
+        monkeypatch.setattr(approval_smart, "_smart_approve", lambda *_: "escalate")
 
     def test_webhook_dangerous_command_denies_by_default(self, monkeypatch):
         """Webhook sessions that trigger dangerous commands DENY instantly.

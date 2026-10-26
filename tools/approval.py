@@ -734,8 +734,20 @@ def _allowlisted(command: str) -> dict:
     return allowlisted_result(rule, "; ".join(text for _, text in findings))
 
 
+def _unattended_smart_review(spec: "_GateSpec", command: str, description: str, pattern_key: str,
+                             pattern_keys: list[str] | None = None) -> dict | None:
+    """Smart mode where nobody can be asked: APPROVE runs the action, DENY blocks it,
+    and ESCALATE or a failed call keeps the context's deny."""
+    if approval_context._get_approval_mode() != "smart":
+        return None
+    result, _ = _smart_gate(spec, command, description, pattern_key, pattern_keys or [pattern_key],
+                            get_current_session_key(), human_present=False)
+    return result
+
+
 def _unattended_deny(command: str, ctx: _Unattended) -> dict | None:
-    """Deny-mode handling for one unattended context (cron / -q / webhook); None = allow."""
+    """Deny-mode handling for one unattended context (cron / -q / webhook); None = allow.
+    In smart mode the guardian reviews the command first (:func:`_unattended_smart_review`)."""
     if ctx.mode() != "deny":
         return None
 
@@ -747,8 +759,9 @@ def _unattended_deny(command: str, ctx: _Unattended) -> dict | None:
     pending = _unapproved_findings(command, _is_permanently_approved)
     if pending is not None:
         keys, description = pending
-        result = block(f"Command flagged as dangerous ({description})")
-        if ctx.name == "single_query":
+        result = (_unattended_smart_review(_COMMAND_GATE, command, description, keys[0], keys)
+                  or block(f"Command flagged as dangerous ({description})"))
+        if ctx.name == "single_query" and not result.get("approved"):
             result.update(pattern_key=keys[0], description=description)
         return result
     return None
@@ -1337,6 +1350,10 @@ def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = F
     # sessions: the first active context resolves instantly from its mode.
     for ctx in _unattended_contexts():
         if ctx.mode() == "deny":
+            reviewed = _unattended_smart_review(
+                _EXECUTE_CODE_GATE, f"execute_code <<'PY'\n{code}\nPY", description, pattern_key)
+            if reviewed is not None:
+                return reviewed
             return _denied(
                 "BLOCKED: execute_code runs arbitrary local Python (including "
                 "subprocess calls that bypass shell-string approval checks). " + ctx.exec_tail,
