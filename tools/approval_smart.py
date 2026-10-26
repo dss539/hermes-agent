@@ -120,8 +120,11 @@ def _smart_approve(command: str, description: str) -> str:
             'via -c flag" but is completely harmless.\n\n'
             "Respond with exactly one word: APPROVE, DENY, or ESCALATE"
         )
+        # No output cap: a capped verdict let reasoning models spend the whole budget thinking and
+        # return nothing, which escalated every command (#117428). Routes that require a cap
+        # (Anthropic Messages) get the model's own maximum from the adapter.
         response = call_llm(
-            task="approval", temperature=0, max_tokens=16, timeout=smart_timeout,
+            task="approval", temperature=0, timeout=smart_timeout,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             reasoning_config=_verdict_reasoning(),
         )
@@ -129,10 +132,9 @@ def _smart_approve(command: str, description: str) -> str:
         answer = (response.choices[0].message.content or "").strip().upper()
         if not answer:
             # WARNING, not DEBUG: an empty-but-200 body is an infrastructure failure, not a
-            # verdict — typically finish_reason=="length" after a reasoning model spent the
-            # whole max_tokens budget on hidden reasoning (#117428). It escalates like any
-            # uncertain outcome, but is indistinguishable from a genuine ESCALATE in the logs
-            # unless this fires above DEBUG.
+            # verdict (for example finish_reason=="length" from a provider-side cap). It escalates
+            # like any uncertain outcome, but is indistinguishable from a genuine ESCALATE in the
+            # logs unless this fires above DEBUG.
             finish_reason = getattr(response.choices[0], "finish_reason", None)
             logger.warning("Smart approvals: guardian returned an empty answer "
                            "(finish_reason=%s), escalating", finish_reason)
