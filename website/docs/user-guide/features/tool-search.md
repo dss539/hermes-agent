@@ -81,6 +81,12 @@ post-tool-call hooks all run against the real tool name — not against
 `tool_call`. The activity feed in the CLI and gateway also unwraps so you
 see the underlying tool, not the bridge.
 
+A model that calls a deferred tool **directly by its own name** gets the
+same result: if the session could reach that tool through `tool_call`,
+Hermes runs it with `tool_call`'s scope and argument checks, instead of
+treating the name as unknown and repairing it to a similar offered tool.
+This never changes the tool list, so the prompt cache is untouched.
+
 ## When does it activate?
 
 Tool Search uses **tiered disclosure**: the presence of *any* deferred

@@ -79,9 +79,11 @@ def validate_tool_calls(
     3; args cut off mid-stream (routers rewrite ``length`` → ``tool_calls``) are refused
     outright rather than retried."""
     from agent.conversation_loop import _invalid_tool_name_error_content
+    from agent.tool_executor import callable_tool_names
 
     tool_calls = assistant_message.tool_calls
-    valid_names = agent.valid_tool_names
+    # Direct deferred calls get the bridge's checks, never fuzzy repair to a different tool.
+    valid_names = callable_tool_names(agent)
 
     def _verdict(action: str, result: Optional[dict[str, Any]] = None) -> ToolValidationVerdict:
         return ToolValidationVerdict(action=action, result=result, mixed_invalid_batch=_mixed_invalid_batch)
@@ -145,7 +147,7 @@ def validate_tool_calls(
         _append_tool_error_results(
             messages, tool_calls,
             lambda tc: (
-                _invalid_tool_name_error_content(tc.function.name, valid_names)
+                _invalid_tool_name_error_content(tc.function.name, agent.valid_tool_names)
                 if tc.function.name not in valid_names
                 else "Skipped: another tool call in this turn used an invalid name. Please retry this tool call."
             ),

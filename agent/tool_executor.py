@@ -368,16 +368,30 @@ def _tool_search_scoped_names(agent) -> frozenset:
     try:
         import model_tools
         from tools import tool_search as _ts
-    except Exception:
-        return frozenset()
-    try:
+        from toolsets import agent_tool_drops
+        drops = agent_tool_drops(agent)
         return _ts.scoped_deferrable_names(model_tools.get_tool_definitions(
             enabled_toolsets=getattr(agent, "enabled_toolsets", None),
             disabled_toolsets=getattr(agent, "disabled_toolsets", None),
             quiet_mode=True, skip_tool_search_assembly=True,
-        ) or [])
+        ) or []) - drops
     except Exception:
         return frozenset()
+
+
+def callable_tool_names(agent) -> frozenset:
+    """Names a model may call directly: the offered tools plus, while the ``tool_call`` bridge
+    is offered, the session-scoped deferred tools it could reach through that bridge. A direct
+    call to a deferred tool gets exactly the bridge's authority and argument checks
+    (``_unwrap_tool_search_call``), instead of being fuzzy-repaired to a different tool."""
+    offered = frozenset(getattr(agent, "valid_tool_names", None) or ())
+    try:
+        from tools import tool_search as _ts
+    except Exception:
+        return offered
+    if _ts.TOOL_CALL_NAME not in offered:
+        return offered
+    return offered | _tool_search_scoped_names(agent)
 
 
 def _canonical_tool_name(function_name: str) -> str:
@@ -404,8 +418,13 @@ def _unwrap_tool_search_call(
     try:
         from tools import tool_search as _ts
         if function_name != _ts.TOOL_CALL_NAME:
-            return function_name, function_args, None
-        underlying, underlying_args, err = _ts.resolve_underlying_call(function_args)
+            if (function_name in (getattr(agent, "valid_tool_names", None) or ())
+                    or function_name not in callable_tool_names(agent)):
+                return function_name, function_args, None
+            # A direct call to a deferred tool: same checks as tool_call(name=function_name).
+            underlying, underlying_args, err = function_name, function_args, None
+        else:
+            underlying, underlying_args, err = _ts.resolve_underlying_call(function_args)
         if err or not underlying:
             return function_name, function_args, None
         if underlying == _ts.CONNECTOR_BATCH_SENTINEL:
@@ -1727,6 +1746,7 @@ def _resolve_sequential_dispatch(agent, ref: _ToolCallRef, messages: list) -> _S
                 tool_request_middleware_trace=list(middleware_trace),
                 enabled_toolsets=getattr(agent, "enabled_toolsets", None),
                 disabled_toolsets=getattr(agent, "disabled_toolsets", None),
+                agent=agent,
             )
 
     return _SequentialDispatch(
